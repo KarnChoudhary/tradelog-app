@@ -283,7 +283,7 @@ function initDropdowns() {
 function calc() {
   const bp  = num(document.getElementById('f-buypx').value);
   const sl  = num(document.getElementById('f-sl').value);
-  const al  = num(document.getElementById('f-alloc').value);
+  const al  = num(document.getElementById('f-alloc-input').value);
   const pv  = num(document.getElementById('f-port').value) || cfg.portVal;
   const sp  = num(document.getElementById('f-sellpx').value);
   const bd  = document.getElementById('f-buydate').value;
@@ -375,7 +375,7 @@ function closeTradeMo() {
 }
 function resetForm() {
   ['f-stock','f-buydate','f-buypx','f-emp','f-emd',
-   'f-selldate','f-sellpx','f-sl','f-alloc','f-port','f-notes'].forEach(id=>{
+   'f-selldate','f-sellpx','f-sl','f-alloc-input','f-port','f-notes'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.value='';
   });
   ['f-setup','f-exit','f-mkt'].forEach(id=>{
@@ -396,7 +396,7 @@ function fillForm(t) {
   set('f-selldate',t.sellDate);
   set('f-sellpx',  t.sellPx);
   set('f-sl',      t.sl);
-  set('f-alloc',   t.alloc);
+  set('f-alloc-input', t.alloc);
   set('f-port',    t.portVal||cfg.portVal||'');
   set('f-setup',   t.setup);
   set('f-exit',    t.exitR);
@@ -422,7 +422,7 @@ function saveTrade() {
     sellDate: document.getElementById('f-selldate').value||null,
     sellPx:   num(document.getElementById('f-sellpx').value),
     sl:       num(document.getElementById('f-sl').value),
-    alloc:    num(document.getElementById('f-alloc').value),
+    alloc:    num(document.getElementById('f-alloc-input').value),
     portVal:  num(document.getElementById('f-port').value)||cfg.portVal||0,
     setup:    document.getElementById('f-setup').value,
     exitR:    document.getElementById('f-exit').value,
@@ -519,7 +519,6 @@ function openSettings() {
   document.getElementById('s-port').value = cfg.portVal||'';
   document.getElementById('s-url').value  = cfg.sbUrl||'';
   document.getElementById('s-key').value  = cfg.sbKey||'';
-  // Show current connection state
   const statusEl = document.getElementById('conn-status');
   if (statusEl) {
     if (sbClient && cfg.sbUrl && cfg.sbKey) {
@@ -530,9 +529,9 @@ function openSettings() {
       statusEl.innerHTML = '';
     }
   }
-  // Sync theme toggle state
   const th = document.documentElement.getAttribute('data-theme')||'dark';
   applyTheme(th);
+  renderFeatureList();
   document.getElementById('mo-settings').classList.add('open');
 }
 function closeSettings() {
@@ -738,43 +737,197 @@ function renderTrades() {
    RENDER — TABLE
 ═══════════════════════════════════════════════ */
 function renderTable() {
+  renderTableHead();
   const tbody=document.getElementById('tbl-body');
   if(!trades.length) {
-    tbody.innerHTML=`<tr><td colspan="23" style="text-align:center;color:var(--text3);padding:30px">No trades yet</td></tr>`;
+    const colspan = visibleCols().length;
+    tbody.innerHTML=`<tr><td colspan="${colspan}" style="text-align:center;color:var(--text3);padding:30px">No trades yet</td></tr>`;
     return;
   }
+  const cols = visibleCols();
   tbody.innerHTML=trades.map((t,i)=>{
     const c=fullCalcs(t);
-    const statusBadge=`<span class="badge b-${t.status.toLowerCase()}">${t.status}</span>`;
-    const typeBadge  =`<span class="badge b-${t.type.toLowerCase()}">${t.type==='Virtual'?'VIRT':'REAL'}</span>`;
-    const td=(v,cls='')=>`<td class="${cls}">${v}</td>`;
-    const tdc=(v,n2)=>`<td class="${pCls(n2)}">${v}</td>`;
-    return `<tr onclick="openDetailMo('${t.id}')">
-      ${td(i+1,'td-num')}
-      ${td(`<span class="td-stock">${t.stock}</span>`)}
-      ${td(statusBadge)}
-      ${td(typeBadge)}
-      ${td(fDate(t.buyDate))}
-      ${td(t.buyPx?'₹'+t.buyPx:'—')}
-      ${td(t.emPrev?'₹'+t.emPrev:'—')}
-      ${td(t.emDay?'₹'+t.emDay:'—')}
-      ${td(fDate(t.sellDate))}
-      ${td(t.sellPx?'₹'+t.sellPx:'—')}
-      ${td(t.sl?'₹'+t.sl:'—')}
-      ${tdc(c.sl!==null?f2(c.sl)+'%':'—', c.sl!==null?-c.sl:null)}
-      ${td(t.alloc?fINR(t.alloc,true):'—')}
-      ${td(c.ap!==null?f2(c.ap)+'%':'—')}
-      ${td(c.q!==null?c.q:'—')}
-      ${tdc(c.pnlV!==null?fINR(c.pnlV,true):'—', c.pnlV)}
-      ${tdc(c.pnlP!==null?sgn(c.pnlP)+f2(c.pnlP)+'%':'—', c.pnlP)}
-      ${tdc(c.portPnl!==null?sgn(c.portPnl)+f2(c.portPnl)+'%':'—', c.portPnl)}
-      ${tdc(c.rr!==null?f2(c.rr)+'x':'—', c.rr)}
-      ${td(c.days!==null?c.days+'d':'—')}
-      ${td(t.setup||'—')}
-      ${td(t.exitR||'—')}
-      ${td(t.mktState||'—')}
-    </tr>`;
+    const get = (lbl) => {
+      switch(lbl) {
+        case '#':          return `<td class="td-num" style="text-align:left;position:sticky;left:0;background:var(--bg2);z-index:1">${i+1}</td>`;
+        case 'Stock':      return `<td class="td-stock" style="text-align:left;position:sticky;left:38px;background:var(--bg2);z-index:1">${t.stock}</td>`;
+        case 'Status':     return `<td><span class="badge b-${t.status.toLowerCase()}">${t.status}</span></td>`;
+        case 'Type':       return `<td><span class="badge b-${t.type.toLowerCase()}">${t.type==='Virtual'?'VIRT':'REAL'}</span></td>`;
+        case 'Buy Date':   return `<td>${fDate(t.buyDate)}</td>`;
+        case 'Buy ₹':      return `<td>${t.buyPx?'₹'+t.buyPx:'—'}</td>`;
+        case 'EMA Prev':   return `<td>${t.emPrev?'₹'+t.emPrev:'—'}</td>`;
+        case 'EMA Day':    return `<td>${t.emDay?'₹'+t.emDay:'—'}</td>`;
+        case 'Sell Date':  return `<td>${fDate(t.sellDate)}</td>`;
+        case 'Sell ₹':     return `<td>${t.sellPx?'₹'+t.sellPx:'—'}</td>`;
+        case 'SL ₹':       return `<td>${t.sl?'₹'+t.sl:'—'}</td>`;
+        case 'SL %':       return `<td class="${pCls(c.sl!==null?-c.sl:null)}">${c.sl!==null?f2(c.sl)+'%':'—'}</td>`;
+        case 'Alloc ₹':    return `<td>${t.alloc?fINR(t.alloc,true):'—'}</td>`;
+        case 'Alloc %':    return `<td>${c.ap!==null?f2(c.ap)+'%':'—'}</td>`;
+        case 'Qty':        return `<td>${c.q!==null?c.q:'—'}</td>`;
+        case 'P&L ₹':      return `<td class="${pCls(c.pnlV)}">${c.pnlV!==null?fINR(c.pnlV,true):'—'}</td>`;
+        case 'P&L %':      return `<td class="${pCls(c.pnlP)}">${c.pnlP!==null?sgn(c.pnlP)+f2(c.pnlP)+'%':'—'}</td>`;
+        case 'Port P&L%':  return `<td class="${pCls(c.portPnl)}">${c.portPnl!==null?sgn(c.portPnl)+f2(c.portPnl)+'%':'—'}</td>`;
+        case 'R:R':        return `<td class="${pCls(c.rr)}">${c.rr!==null?f2(c.rr)+'x':'—'}</td>`;
+        case 'Days':       return `<td>${c.days!==null?c.days+'d':'—'}</td>`;
+        case 'Setup':      return `<td>${t.setup||'—'}</td>`;
+        case 'Exit':       return `<td>${t.exitR||'—'}</td>`;
+        case 'Mkt State':  return `<td>${t.mktState||'—'}</td>`;
+        default:           return `<td>—</td>`;
+      }
+    };
+    return `<tr onclick="openDetailMo('${t.id}')">${cols.map(c=>get(c.lbl)).join('')}</tr>`;
   }).join('');
+}
+
+/* ═══════════════════════════════════════════════
+   FEATURE TOGGLE SYSTEM
+═══════════════════════════════════════════════ */
+
+// Master feature registry — id matches CSS class `feat-{id}` on form elements
+const FEATURES = [
+  { id:'tradeType', label:'Real / Virtual Tag',      desc:'Tag trades as Real or Paper/Virtual',    icon:'🏷️',  group:'Entry',    def:true  },
+  { id:'ema',       label:'EMA Values',              desc:'Record EMA on prev day & entry day',      icon:'📈',  group:'Entry',    def:true  },
+  { id:'sl',        label:'Stop Loss (SL)',           desc:'SL price and auto-calculated SL %',       icon:'🛡️',  group:'Risk',     def:true  },
+  { id:'alloc',     label:'Allocation / Position',   desc:'Allocation ₹, Alloc %, Quantity auto',    icon:'💰',  group:'Risk',     def:true  },
+  { id:'portPnl',   label:'Portfolio P&L %',         desc:'P&L as % of total portfolio value',       icon:'📊',  group:'Results',  def:true  },
+  { id:'rr',        label:'Risk:Reward Ratio',       desc:'R:R = Profit booked ÷ SL distance',       icon:'⚖️',  group:'Results',  def:true  },
+  { id:'days',      label:'Days Held',               desc:'Number of days trade was held',           icon:'📅',  group:'Results',  def:true  },
+  { id:'setup',     label:'Setup / Pattern',         desc:'Chart pattern dropdown (VCP, Flag…)',     icon:'🔭',  group:'Analysis', def:true  },
+  { id:'exitR',     label:'Exit Reason',             desc:'Why you closed the trade',                icon:'🚪',  group:'Analysis', def:true  },
+  { id:'mktState',  label:'Market State',            desc:'Overall market condition at trade time',  icon:'🌡️',  group:'Analysis', def:true  },
+  { id:'notes',     label:'Notes / Journal',         desc:'Free-text observations and lessons',      icon:'📝',  group:'Analysis', def:true  },
+];
+
+// Active features stored in cfg
+function defaultFeatures() {
+  const f={};
+  FEATURES.forEach(ft=>{ f[ft.id]=ft.def; });
+  return f;
+}
+
+function featOn(id) {
+  return cfg.features ? (cfg.features[id] !== false) : true;
+}
+
+function applyFeatures() {
+  FEATURES.forEach(ft=>{
+    const on = featOn(ft.id);
+    // Show/hide all elements with class feat-{id}
+    document.querySelectorAll(`.feat-${ft.id}`).forEach(el=>{
+      el.style.display = on ? '' : 'none';
+    });
+  });
+  // Hide analysis section divider entirely if all analysis fields are off
+  const analysisFeatIds = ['setup','exitR','mktState','notes'];
+  const anyAnalysis = analysisFeatIds.some(id=>featOn(id));
+  // The divider before analysis already uses feat classes, handled above
+}
+
+function renderFeatureList() {
+  if(!cfg.features) cfg.features = defaultFeatures();
+  const el = document.getElementById('feat-list');
+  if(!el) return;
+
+  // Group features
+  const groups = {};
+  FEATURES.forEach(ft=>{
+    if(!groups[ft.group]) groups[ft.group]=[];
+    groups[ft.group].push(ft);
+  });
+
+  let html='';
+  Object.entries(groups).forEach(([grp, feats])=>{
+    html += `<div class="feat-group-lbl">${grp}</div>`;
+    feats.forEach(ft=>{
+      const on = featOn(ft.id);
+      html += `<div class="feat-row" onclick="toggleFeat('${ft.id}')">
+        <div class="feat-ico">${ft.icon}</div>
+        <div class="feat-info">
+          <div class="feat-name">${ft.label}</div>
+          <div class="feat-desc">${ft.desc}</div>
+        </div>
+        <div class="feat-tog ${on?'feat-on':'feat-off'}" id="ftog-${ft.id}">
+          <div class="feat-thumb"></div>
+        </div>
+      </div>`;
+    });
+  });
+
+  // Reset to defaults button
+  html += `<button class="feat-reset-btn" onclick="resetFeatures()">↺ Reset All to Defaults</button>`;
+  el.innerHTML = html;
+}
+
+function toggleFeat(id) {
+  if(!cfg.features) cfg.features = defaultFeatures();
+  cfg.features[id] = !featOn(id);
+  localStorage.setItem(LS_C, JSON.stringify(cfg));
+  // Update the toggle visually
+  const tog = document.getElementById('ftog-'+id);
+  if(tog) {
+    tog.className = 'feat-tog ' + (cfg.features[id] ? 'feat-on' : 'feat-off');
+  }
+  applyFeatures();
+  // Re-render table head if on table view
+  if(curView==='table') renderTableHead();
+}
+
+function resetFeatures() {
+  cfg.features = defaultFeatures();
+  localStorage.setItem(LS_C, JSON.stringify(cfg));
+  renderFeatureList();
+  applyFeatures();
+  if(curView==='table') renderTableHead();
+  toast('✓ All fields restored to defaults');
+}
+
+/* ═══════════════════════════════════════════════
+   TABLE — DYNAMIC COLUMNS BASED ON FEATURES
+═══════════════════════════════════════════════ */
+// Column definitions: [label, alwaysOn, featId or null]
+const TABLE_COLS = [
+  { lbl:'#',          always:true  },
+  { lbl:'Stock',      always:true  },
+  { lbl:'Status',     always:true  },
+  { lbl:'Type',       feat:'tradeType' },
+  { lbl:'Buy Date',   always:true  },
+  { lbl:'Buy ₹',      always:true  },
+  { lbl:'EMA Prev',   feat:'ema'   },
+  { lbl:'EMA Day',    feat:'ema'   },
+  { lbl:'Sell Date',  always:true  },
+  { lbl:'Sell ₹',     always:true  },
+  { lbl:'SL ₹',       feat:'sl'    },
+  { lbl:'SL %',       feat:'sl'    },
+  { lbl:'Alloc ₹',    feat:'alloc' },
+  { lbl:'Alloc %',    feat:'alloc' },
+  { lbl:'Qty',        feat:'alloc' },
+  { lbl:'P&L ₹',      always:true  },
+  { lbl:'P&L %',      always:true  },
+  { lbl:'Port P&L%',  feat:'portPnl'},
+  { lbl:'R:R',        feat:'rr'    },
+  { lbl:'Days',       feat:'days'  },
+  { lbl:'Setup',      feat:'setup' },
+  { lbl:'Exit',       feat:'exitR' },
+  { lbl:'Mkt State',  feat:'mktState'},
+];
+
+function visibleCols() {
+  return TABLE_COLS.filter(c => c.always || featOn(c.feat));
+}
+
+function renderTableHead() {
+  const thead = document.getElementById('tbl-head');
+  if(!thead) return;
+  const cols = visibleCols();
+  const stickyLeft = ['#','Stock'];
+  let th = cols.map((c,i)=>{
+    const isSticky = stickyLeft.includes(c.lbl);
+    const style = isSticky
+      ? `style="text-align:left;position:sticky;left:${i===0?'0':'38px'};z-index:3;background:var(--bg)"`
+      : '';
+    return `<th ${style}>${c.lbl}</th>`;
+  }).join('');
+  thead.innerHTML = `<tr>${th}</tr>`;
 }
 
 /* ═══════════════════════════════════════════════
@@ -809,11 +962,14 @@ function registerSW() {
    BOOT
 ═══════════════════════════════════════════════ */
 (function init() {
-  loadTheme();     // theme before paint
+  loadTheme();
   loadCfg();
+  if(!cfg.features) cfg.features = defaultFeatures();
   loadTrades();
   initDropdowns();
   initSB();
+  applyFeatures();
+  renderTableHead();
   renderDash();
   registerSW();
 })();

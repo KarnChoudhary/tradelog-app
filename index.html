@@ -74,15 +74,7 @@
       <div style="padding:0 14px 10px"><div class="section-hd">TRADE LEDGER</div></div>
       <div class="tbl-wrap">
         <table id="main-table">
-          <thead><tr>
-            <th style="text-align:left;position:sticky;left:0;z-index:3;background:var(--bg)">#</th>
-            <th style="text-align:left;position:sticky;left:38px;z-index:3;background:var(--bg)">Stock</th>
-            <th>Status</th><th>Type</th><th>Buy Date</th><th>Buy ₹</th>
-            <th>EMA Prev</th><th>EMA Day</th><th>Sell Date</th><th>Sell ₹</th>
-            <th>SL ₹</th><th>SL %</th><th>Alloc ₹</th><th>Alloc %</th><th>Qty</th>
-            <th>P&amp;L ₹</th><th>P&amp;L %</th><th>Port P&amp;L%</th>
-            <th>R:R</th><th>Days</th><th>Setup</th><th>Exit</th><th>Mkt State</th>
-          </tr></thead>
+          <thead id="tbl-head"></thead>
           <tbody id="tbl-body"></tbody>
         </table>
       </div>
@@ -113,7 +105,7 @@
     </div>
   </nav>
 
-  <!-- ADD/EDIT TRADE MODAL -->
+  <!-- ═══ ADD/EDIT TRADE MODAL ═══ -->
   <div id="mo-trade" class="modal-ov">
     <div class="modal-sheet">
       <div class="modal-handle"></div>
@@ -131,7 +123,7 @@
               <button class="tog-btn"          id="tog-closed" onclick="setStatus('Closed',this)">Closed</button>
             </div>
           </div>
-          <div class="fg">
+          <div class="fg feat-tradeType">
             <label class="f-lbl">Type</label>
             <div class="tog">
               <button class="tog-btn t-real"    id="tog-real"    onclick="setType('Real',this)">Real</button>
@@ -149,17 +141,21 @@
         <div class="fg-2">
           <div class="fg"><label class="f-lbl">Buy Date</label><input id="f-buydate" class="f-ctrl" type="date" onchange="calc()"></div>
           <div class="fg"><label class="f-lbl">Buy Price ₹</label><input id="f-buypx" class="f-ctrl" type="number" step="0.01" placeholder="0.00" oninput="calc()"></div>
+        </div>
+        <div class="fg-2 feat-ema" style="margin-top:11px">
           <div class="fg"><label class="f-lbl">EMA Prev Day</label><input id="f-emp" class="f-ctrl" type="number" step="0.01" placeholder="0.00"></div>
           <div class="fg"><label class="f-lbl">EMA Entry Day</label><input id="f-emd" class="f-ctrl" type="number" step="0.01" placeholder="0.00"></div>
         </div>
 
-        <div class="f-div"></div>
-        <div class="fsec">RISK &amp; POSITION</div>
-        <div class="fg-3">
+        <div class="f-div feat-sl feat-alloc"></div>
+        <div class="fsec feat-sl feat-alloc">RISK &amp; POSITION</div>
+        <div class="fg-2 feat-sl" style="margin-bottom:11px">
           <div class="fg"><label class="f-lbl">SL Price ₹</label><input id="f-sl" class="f-ctrl" type="number" step="0.01" placeholder="0.00" oninput="calc()"></div>
           <div class="fg"><label class="f-lbl">SL % <span class="auto-tag">AUTO</span></label><input id="f-slpct" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+        </div>
+        <div class="fg-3 feat-alloc">
           <div class="fg"><label class="f-lbl">Portfolio ₹</label><input id="f-port" class="f-ctrl" type="number" placeholder="500000" oninput="calc()"></div>
-          <div class="fg"><label class="f-lbl">Allocation ₹</label><input id="f-alloc" class="f-ctrl" type="number" step="0.01" placeholder="0.00" oninput="calc()"></div>
+          <div class="fg"><label class="f-lbl">Allocation ₹</label><input id="f-alloc-input" class="f-ctrl" type="number" step="0.01" placeholder="0.00" oninput="calc()"></div>
           <div class="fg"><label class="f-lbl">Alloc % <span class="auto-tag">AUTO</span></label><input id="f-allocpct" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
           <div class="fg"><label class="f-lbl">Qty <span class="auto-tag">AUTO</span></label><input id="f-qty" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
         </div>
@@ -176,20 +172,20 @@
           <div class="fg-3">
             <div class="fg"><label class="f-lbl">P&amp;L ₹</label><input id="f-pnlv" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
             <div class="fg"><label class="f-lbl">P&amp;L %</label><input id="f-pnlp" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
-            <div class="fg"><label class="f-lbl">Port P&amp;L%</label><input id="f-portpnl" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
-            <div class="fg"><label class="f-lbl">R:R Ratio</label><input id="f-rr" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
-            <div class="fg"><label class="f-lbl">Days Held</label><input id="f-days" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+            <div class="fg feat-portPnl"><label class="f-lbl">Port P&amp;L%</label><input id="f-portpnl" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+            <div class="fg feat-rr"><label class="f-lbl">R:R Ratio</label><input id="f-rr" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+            <div class="fg feat-days"><label class="f-lbl">Days Held</label><input id="f-days" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
           </div>
         </div>
 
-        <div class="f-div"></div>
-        <div class="fsec">ANALYSIS</div>
+        <div class="f-div feat-setup feat-exitR feat-mktState"></div>
+        <div class="fsec feat-setup feat-exitR feat-mktState">ANALYSIS</div>
         <div class="fg-2" style="margin-bottom:11px">
-          <div class="fg"><label class="f-lbl">Setup / Pattern</label><select id="f-setup" class="f-ctrl"><option value="">— Select —</option></select></div>
-          <div class="fg"><label class="f-lbl">Exit Reason</label><select id="f-exit" class="f-ctrl"><option value="">— Select —</option></select></div>
-          <div class="fg" style="grid-column:span 2"><label class="f-lbl">Market State</label><select id="f-mkt" class="f-ctrl"><option value="">— Select —</option></select></div>
+          <div class="fg feat-setup"><label class="f-lbl">Setup / Pattern</label><select id="f-setup" class="f-ctrl"><option value="">— Select —</option></select></div>
+          <div class="fg feat-exitR"><label class="f-lbl">Exit Reason</label><select id="f-exit" class="f-ctrl"><option value="">— Select —</option></select></div>
+          <div class="fg feat-mktState" style="grid-column:span 2"><label class="f-lbl">Market State</label><select id="f-mkt" class="f-ctrl"><option value="">— Select —</option></select></div>
         </div>
-        <div class="fg">
+        <div class="fg feat-notes">
           <label class="f-lbl">Notes / Observations</label>
           <textarea id="f-notes" class="f-ctrl" rows="3" placeholder="Why you entered, key levels, lessons learned…"></textarea>
         </div>
@@ -205,7 +201,7 @@
     </div>
   </div>
 
-  <!-- DETAIL MODAL -->
+  <!-- ═══ DETAIL MODAL ═══ -->
   <div id="mo-detail" class="modal-ov">
     <div class="modal-sheet">
       <div class="modal-handle"></div>
@@ -221,16 +217,18 @@
     </div>
   </div>
 
-  <!-- SETTINGS MODAL -->
+  <!-- ═══ SETTINGS MODAL ═══ -->
   <div id="mo-settings" class="modal-ov">
     <div class="modal-sheet">
       <div class="modal-handle"></div>
       <div class="modal-hdr"><div class="modal-title">SETTINGS</div><button class="modal-close" onclick="closeSettings()">✕</button></div>
       <div class="modal-body">
+
+        <!-- APPEARANCE -->
         <div class="fsec">APPEARANCE</div>
         <div class="theme-switch">
           <div class="theme-switch-lbl">
-            <div class="s-lbl" style="font-family:var(--ff-d);font-size:14px;font-weight:600;color:var(--text)">Theme</div>
+            <div class="s-lbl">Theme</div>
             <div style="font-size:11px;color:var(--text3);margin-top:2px" id="theme-sub">Dark mode active</div>
           </div>
           <div class="ts-track" onclick="toggleTheme()" title="Toggle theme">
@@ -238,12 +236,23 @@
           </div>
         </div>
 
+        <!-- FEATURES -->
+        <div class="f-div"></div>
+        <div class="fsec">CUSTOMIZE FIELDS</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:12px;line-height:1.6">
+          Toggle fields on/off. Hidden fields won't appear in the trade form, cards, detail view, or table columns.
+        </div>
+        <div id="feat-list"></div>
+
+        <!-- PORTFOLIO -->
         <div class="f-div"></div>
         <div class="fsec">PORTFOLIO</div>
         <div class="fg" style="margin-bottom:16px">
           <label class="f-lbl">Default Portfolio Value (₹)</label>
           <input id="s-port" class="f-ctrl" type="number" placeholder="e.g. 500000" oninput="persistSettings()">
         </div>
+
+        <!-- SUPABASE -->
         <div class="f-div"></div>
         <div class="fsec">SUPABASE CLOUD SYNC</div>
         <div class="fg" style="margin-bottom:10px">
@@ -256,12 +265,14 @@
         </div>
         <div id="conn-status"></div>
         <div style="display:flex;gap:9px;margin-top:10px;margin-bottom:6px">
-          <button class="btn btn-sec" style="font-size:12px;padding:10px;flex:1" onclick="saveAndTestSB()">🔗 Save &amp; Test</button>
+          <button class="btn btn-sec" style="font-size:12px;padding:10px;flex:1" onclick="saveAndTestSB()">🔗 Save &amp; Test Connection</button>
         </div>
         <div style="display:flex;gap:9px;margin-bottom:14px">
           <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="pushCloud()">⬆ Push to Cloud</button>
           <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="pullCloud()">⬇ Pull from Cloud</button>
         </div>
+
+        <!-- DATA -->
         <div class="f-div"></div>
         <div class="fsec">DATA</div>
         <div style="display:flex;gap:9px;margin-bottom:14px">
@@ -269,20 +280,21 @@
           <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="document.getElementById('imp-file').click()">📥 Import JSON</button>
         </div>
         <input type="file" id="imp-file" accept=".json" style="display:none" onchange="importJSON(this)">
+
         <div class="s-info">
           <div class="s-info-hd">📱 ANDROID INSTALL</div>
           Open in Chrome → tap ⋮ → <b>Add to Home Screen</b>. Works offline. For a native <b>.apk</b> see <code>README.md</code>.
         </div>
         <div class="s-info" style="margin-top:10px">
           <div class="s-info-hd">☁ SUPABASE SETUP</div>
-          Run <code>supabase-schema.sql</code> in Supabase SQL editor. Then enter URL + key above and tap Push/Pull to sync.
+          Run <code>supabase-schema.sql</code> in Supabase SQL editor first. Then paste credentials above and tap <b>Save &amp; Test</b>.
         </div>
       </div>
       <div class="modal-foot"><button class="btn btn-primary" onclick="closeSettings()">Done</button></div>
     </div>
   </div>
 
-  <!-- CONFIRM DIALOG -->
+  <!-- ═══ CONFIRM DIALOG ═══ -->
   <div id="confirm-ov">
     <div id="confirm-box">
       <h3>Delete Trade?</h3>
@@ -296,7 +308,6 @@
 
 </div><!-- #app -->
 <div id="toast"></div>
-
 <script src="app.js"></script>
 </body>
 </html>
