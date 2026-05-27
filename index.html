@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>TradeLog — NSE Journal</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#060b14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TradeLog">
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <header id="topbar">
+    <div class="logo"><div class="logo-dot"></div>TRADE<em>LOG</em></div>
+    <div class="hdr-right">
+      <div id="sync-pill"></div>
+      <button class="icon-btn" onclick="openSettings()" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- DASHBOARD -->
+    <section id="v-dashboard" class="view active">
+      <div class="port-banner">
+        <div class="pb-row">
+          <div class="pb-left"><div class="pb-label">TOTAL PORTFOLIO</div><div class="pb-value" id="pb-value">₹—</div></div>
+          <div class="pb-right"><div class="pb-pnl" id="pb-pnl">—</div><div class="pb-pct" id="pb-pct">—</div></div>
+        </div>
+        <div class="pb-counts">
+          <div class="pb-count"><span id="pb-total">0</span> Trades</div>
+          <div class="pb-count"><span id="pb-open">0</span> Open</div>
+          <div class="pb-count"><span id="pb-closed">0</span> Closed</div>
+          <div class="pb-count"><span id="pb-wins">0</span> Wins</div>
+        </div>
+      </div>
+      <div class="stats-row">
+        <div class="stat-card sc-win"><div class="s-lbl">Win Rate</div><div class="s-val" id="s-winrate">—</div></div>
+        <div class="stat-card sc-rr"><div class="s-lbl">Avg R:R</div><div class="s-val" id="s-rr">—</div></div>
+        <div class="stat-card sc-days"><div class="s-lbl">Avg Days</div><div class="s-val" id="s-days">—</div></div>
+      </div>
+      <div class="bw-row">
+        <div class="bw-card bw-best"><div class="bw-lbl">🏆 Best</div><div class="bw-stock" id="bw-best-stock">—</div><div class="bw-pct val-p" id="bw-best-pct"></div></div>
+        <div class="bw-card bw-worst"><div class="bw-lbl">💔 Worst</div><div class="bw-stock" id="bw-worst-stock">—</div><div class="bw-pct val-l" id="bw-worst-pct"></div></div>
+      </div>
+      <div id="dash-open"></div>
+      <div id="dash-recent"></div>
+    </section>
+
+    <!-- TRADES -->
+    <section id="v-trades" class="view">
+      <div class="filter-bar">
+        <div class="fp active" data-f="all">All</div>
+        <div class="fp" data-f="open">Open</div>
+        <div class="fp" data-f="closed">Closed</div>
+        <div class="fp" data-f="profit">Profit</div>
+        <div class="fp" data-f="loss">Loss</div>
+        <div class="fp" data-f="real">Real</div>
+        <div class="fp" data-f="virtual">Virtual</div>
+      </div>
+      <div id="trades-list"></div>
+    </section>
+
+    <!-- TABLE -->
+    <section id="v-table" class="view" style="padding:14px 0 calc(var(--nav-h) + 14px)">
+      <div style="padding:0 14px 10px"><div class="section-hd">TRADE LEDGER</div></div>
+      <div class="tbl-wrap">
+        <table id="main-table">
+          <thead><tr>
+            <th style="text-align:left;position:sticky;left:0;z-index:3;background:var(--bg)">#</th>
+            <th style="text-align:left;position:sticky;left:38px;z-index:3;background:var(--bg)">Stock</th>
+            <th>Status</th><th>Type</th><th>Buy Date</th><th>Buy ₹</th>
+            <th>EMA Prev</th><th>EMA Day</th><th>Sell Date</th><th>Sell ₹</th>
+            <th>SL ₹</th><th>SL %</th><th>Alloc ₹</th><th>Alloc %</th><th>Qty</th>
+            <th>P&amp;L ₹</th><th>P&amp;L %</th><th>Port P&amp;L%</th>
+            <th>R:R</th><th>Days</th><th>Setup</th><th>Exit</th><th>Mkt State</th>
+          </tr></thead>
+          <tbody id="tbl-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- BOTTOM NAV -->
+  <nav id="bottom-nav">
+    <div class="nav-item active" data-view="dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      <span class="nav-label">Dash</span>
+    </div>
+    <div class="nav-item" data-view="trades">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      <span class="nav-label">Trades</span>
+    </div>
+    <button class="nav-add" onclick="openTradeModal(null)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+    <div class="nav-item" data-view="table">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+      <span class="nav-label">Table</span>
+    </div>
+    <div class="nav-item" onclick="openSettings()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span class="nav-label">Config</span>
+    </div>
+  </nav>
+
+  <!-- ADD/EDIT TRADE MODAL -->
+  <div id="mo-trade" class="modal-ov">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-hdr">
+        <div class="modal-title" id="mo-trade-title">NEW TRADE</div>
+        <button class="modal-close" onclick="closeTradeMo()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="fsec">TRADE INFO</div>
+        <div class="fg-2">
+          <div class="fg">
+            <label class="f-lbl">Status</label>
+            <div class="tog">
+              <button class="tog-btn t-open"  id="tog-open"   onclick="setStatus('Open',this)">Open</button>
+              <button class="tog-btn"          id="tog-closed" onclick="setStatus('Closed',this)">Closed</button>
+            </div>
+          </div>
+          <div class="fg">
+            <label class="f-lbl">Type</label>
+            <div class="tog">
+              <button class="tog-btn t-real"    id="tog-real"    onclick="setType('Real',this)">Real</button>
+              <button class="tog-btn"            id="tog-virtual" onclick="setType('Virtual',this)">Virtual</button>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:11px" class="fg">
+          <label class="f-lbl">Stock Symbol</label>
+          <input id="f-stock" class="f-ctrl" type="text" placeholder="e.g. RELIANCE, TATAMOTORS" oninput="this.value=this.value.toUpperCase()">
+        </div>
+
+        <div class="f-div"></div>
+        <div class="fsec">ENTRY</div>
+        <div class="fg-2">
+          <div class="fg"><label class="f-lbl">Buy Date</label><input id="f-buydate" class="f-ctrl" type="date" onchange="calc()"></div>
+          <div class="fg"><label class="f-lbl">Buy Price ₹</label><input id="f-buypx" class="f-ctrl" type="number" step="0.01" placeholder="0.00" oninput="calc()"></div>
+          <div class="fg"><label class="f-lbl">EMA Prev Day</label><input id="f-emp" class="f-ctrl" type="number" step="0.01" placeholder="0.00"></div>
+          <div class="fg"><label class="f-lbl">EMA Entry Day</label><input id="f-emd" class="f-ctrl" type="number" step="0.01" placeholder="0.00"></div>
+        </div>
+
+        <div class="f-div"></div>
+        <div class="fsec">RISK &amp; POSITION</div>
+        <div class="fg-3">
+          <div class="fg"><label class="f-lbl">SL Price ₹</label><input id="f-sl" class="f-ctrl" type="number" step="0.01" placeholder="0.00" oninput="calc()"></div>
+          <div class="fg"><label class="f-lbl">SL % <span class="auto-tag">AUTO</span></label><input id="f-slpct" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+          <div class="fg"><label class="f-lbl">Portfolio ₹</label><input id="f-port" class="f-ctrl" type="number" placeholder="500000" oninput="calc()"></div>
+          <div class="fg"><label class="f-lbl">Allocation ₹</label><input id="f-alloc" class="f-ctrl" type="number" step="0.01" placeholder="0.00" oninput="calc()"></div>
+          <div class="fg"><label class="f-lbl">Alloc % <span class="auto-tag">AUTO</span></label><input id="f-allocpct" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+          <div class="fg"><label class="f-lbl">Qty <span class="auto-tag">AUTO</span></label><input id="f-qty" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+        </div>
+
+        <div id="exit-section" style="display:none">
+          <div class="f-div"></div>
+          <div class="fsec">EXIT</div>
+          <div class="fg-2">
+            <div class="fg"><label class="f-lbl">Sell Date</label><input id="f-selldate" class="f-ctrl" type="date" onchange="calc()"></div>
+            <div class="fg"><label class="f-lbl">Sell Price ₹</label><input id="f-sellpx" class="f-ctrl" type="number" step="0.01" placeholder="0.00" oninput="calc()"></div>
+          </div>
+          <div class="f-div"></div>
+          <div class="fsec">RESULTS <span style="font-size:9px;color:var(--text3);font-family:var(--ff-b);font-weight:400;text-transform:none;letter-spacing:0">auto-calculated</span></div>
+          <div class="fg-3">
+            <div class="fg"><label class="f-lbl">P&amp;L ₹</label><input id="f-pnlv" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+            <div class="fg"><label class="f-lbl">P&amp;L %</label><input id="f-pnlp" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+            <div class="fg"><label class="f-lbl">Port P&amp;L%</label><input id="f-portpnl" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+            <div class="fg"><label class="f-lbl">R:R Ratio</label><input id="f-rr" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+            <div class="fg"><label class="f-lbl">Days Held</label><input id="f-days" class="f-ctrl is-auto" type="text" readonly placeholder="—"></div>
+          </div>
+        </div>
+
+        <div class="f-div"></div>
+        <div class="fsec">ANALYSIS</div>
+        <div class="fg-2" style="margin-bottom:11px">
+          <div class="fg"><label class="f-lbl">Setup / Pattern</label><select id="f-setup" class="f-ctrl"><option value="">— Select —</option></select></div>
+          <div class="fg"><label class="f-lbl">Exit Reason</label><select id="f-exit" class="f-ctrl"><option value="">— Select —</option></select></div>
+          <div class="fg" style="grid-column:span 2"><label class="f-lbl">Market State</label><select id="f-mkt" class="f-ctrl"><option value="">— Select —</option></select></div>
+        </div>
+        <div class="fg">
+          <label class="f-lbl">Notes / Observations</label>
+          <textarea id="f-notes" class="f-ctrl" rows="3" placeholder="Why you entered, key levels, lessons learned…"></textarea>
+        </div>
+        <div style="height:6px"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-del" id="del-btn" onclick="confirmDelete()" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>
+        </button>
+        <button class="btn btn-sec" onclick="closeTradeMo()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveTrade()">Save Trade</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DETAIL MODAL -->
+  <div id="mo-detail" class="modal-ov">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-hdr">
+        <div class="modal-title" id="det-title">—</div>
+        <button class="modal-close" onclick="closeDetailMo()">✕</button>
+      </div>
+      <div class="modal-body" id="det-body"></div>
+      <div class="modal-foot">
+        <button class="btn btn-sec" onclick="closeDetailMo()">Close</button>
+        <button class="btn btn-primary" onclick="editFromDetail()">Edit Trade</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS MODAL -->
+  <div id="mo-settings" class="modal-ov">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-hdr"><div class="modal-title">SETTINGS</div><button class="modal-close" onclick="closeSettings()">✕</button></div>
+      <div class="modal-body">
+        <div class="fsec">PORTFOLIO</div>
+        <div class="fg" style="margin-bottom:16px">
+          <label class="f-lbl">Default Portfolio Value (₹)</label>
+          <input id="s-port" class="f-ctrl" type="number" placeholder="e.g. 500000" oninput="persistSettings()">
+        </div>
+        <div class="f-div"></div>
+        <div class="fsec">SUPABASE CLOUD SYNC</div>
+        <div class="fg" style="margin-bottom:10px">
+          <label class="f-lbl">Supabase Project URL</label>
+          <input id="s-url" class="f-ctrl" type="text" placeholder="https://xxxx.supabase.co" oninput="persistSettings()">
+        </div>
+        <div class="fg" style="margin-bottom:14px">
+          <label class="f-lbl">Supabase Anon Key</label>
+          <input id="s-key" class="f-ctrl" type="text" placeholder="eyJhbGci…" oninput="persistSettings()">
+        </div>
+        <div style="display:flex;gap:9px;margin-bottom:14px">
+          <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="pushCloud()">⬆ Push to Cloud</button>
+          <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="pullCloud()">⬇ Pull from Cloud</button>
+        </div>
+        <div class="f-div"></div>
+        <div class="fsec">DATA</div>
+        <div style="display:flex;gap:9px;margin-bottom:14px">
+          <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="exportJSON()">📤 Export JSON</button>
+          <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="document.getElementById('imp-file').click()">📥 Import JSON</button>
+        </div>
+        <input type="file" id="imp-file" accept=".json" style="display:none" onchange="importJSON(this)">
+        <div class="s-info">
+          <div class="s-info-hd">📱 ANDROID INSTALL</div>
+          Open in Chrome → tap ⋮ → <b>Add to Home Screen</b>. Works offline. For a native <b>.apk</b> see <code>README.md</code>.
+        </div>
+        <div class="s-info" style="margin-top:10px">
+          <div class="s-info-hd">☁ SUPABASE SETUP</div>
+          Run <code>supabase-schema.sql</code> in Supabase SQL editor. Then enter URL + key above and tap Push/Pull to sync.
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-primary" onclick="closeSettings()">Done</button></div>
+    </div>
+  </div>
+
+  <!-- CONFIRM DIALOG -->
+  <div id="confirm-ov">
+    <div id="confirm-box">
+      <h3>Delete Trade?</h3>
+      <p>This action cannot be undone.</p>
+      <div class="row">
+        <button class="btn btn-sec" onclick="closeConfirm()">Cancel</button>
+        <button class="btn" style="flex:1;background:var(--loss);color:#fff" onclick="doDelete()">Delete</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- #app -->
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
