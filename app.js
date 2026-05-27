@@ -107,6 +107,27 @@ function fDate(d) {
 }
 
 /* ═══════════════════════════════════════════════
+   THEME
+═══════════════════════════════════════════════ */
+function applyTheme(th) {
+  document.documentElement.setAttribute('data-theme', th);
+  const isLight = th === 'light';
+  const thumb = document.getElementById('ts-thumb');
+  const sub   = document.getElementById('theme-sub');
+  if (thumb) thumb.textContent = isLight ? '☀️' : '🌙';
+  if (sub)   sub.textContent   = isLight ? 'Light mode active' : 'Dark mode active';
+  localStorage.setItem('tl_theme', th);
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+}
+function loadTheme() {
+  const saved = localStorage.getItem('tl_theme') || 'dark';
+  applyTheme(saved);
+}
+
+/* ═══════════════════════════════════════════════
    STORAGE
 ═══════════════════════════════════════════════ */
 const LS_T='tl_trades', LS_C='tl_cfg';
@@ -114,10 +135,8 @@ function saveTrades() { localStorage.setItem(LS_T, JSON.stringify(trades)); }
 function loadTrades() { trades = JSON.parse(localStorage.getItem(LS_T)||'[]'); }
 function persistSettings() {
   cfg.portVal = parseFloat(document.getElementById('s-port').value)||0;
-  cfg.sbUrl   = document.getElementById('s-url').value.trim();
-  cfg.sbKey   = document.getElementById('s-key').value.trim();
+  // SB creds are saved explicitly via saveAndTestSB()
   localStorage.setItem(LS_C, JSON.stringify(cfg));
-  initSB();
 }
 function loadCfg() {
   const r = localStorage.getItem(LS_C);
@@ -131,13 +150,75 @@ function initSB() {
   const pill = document.getElementById('sync-pill');
   if (cfg.sbUrl && cfg.sbKey && window.supabase) {
     try {
-      sbClient = window.supabase.createClient(cfg.sbUrl, cfg.sbKey);
-      pill.innerHTML = '<span class="sync-pill">☁ SYNC ON</span>';
-    } catch(e) { sbClient=null; pill.innerHTML=''; }
-  } else { sbClient=null; pill.innerHTML=''; }
+      sbClient = window.supabase.createClient(cfg.sbUrl.trim(), cfg.sbKey.trim());
+      if (pill) pill.innerHTML = '<span class="sync-pill">☁ SYNC ON</span>';
+      return true;
+    } catch(e) {
+      sbClient = null;
+      if (pill) pill.innerHTML = '';
+      return false;
+    }
+  } else {
+    sbClient = null;
+    if (pill) pill.innerHTML = '';
+    return false;
+  }
 }
+
+function setConnStatus(type, msg) {
+  const el = document.getElementById('conn-status');
+  if (!el) return;
+  el.innerHTML = `<div class="conn-badge conn-${type}">${msg}</div>`;
+}
+
+async function saveAndTestSB() {
+  const url = document.getElementById('s-url').value.trim();
+  const key = document.getElementById('s-key').value.trim();
+
+  if (!url || !key) {
+    setConnStatus('err', '✗ Enter Project URL and Anon Key first');
+    return;
+  }
+  if (!url.startsWith('https://') || !url.includes('.supabase.co')) {
+    setConnStatus('err', '✗ URL should be https://xxxxx.supabase.co');
+    return;
+  }
+  if (!key.startsWith('eyJ')) {
+    setConnStatus('err', '✗ Anon key should start with eyJ…');
+    return;
+  }
+
+  // Save to cfg
+  cfg.sbUrl = url;
+  cfg.sbKey = key;
+  cfg.portVal = parseFloat(document.getElementById('s-port').value)||0;
+  localStorage.setItem(LS_C, JSON.stringify(cfg));
+
+  setConnStatus('ing', '⏳ Connecting…');
+  const ok = initSB();
+  if (!ok) { setConnStatus('err', '✗ Failed to create Supabase client'); return; }
+
+  // Actual network test — list rows (empty is fine, error means bad creds/missing table)
+  try {
+    const { data, error } = await sbClient
+      .from('tradelog').select('id').limit(1);
+    if (error) {
+      if (error.code === '42P01') {
+        // Table doesn't exist yet — credentials are fine!
+        setConnStatus('ok', '✓ Connected! (Run supabase-schema.sql to create table)');
+      } else {
+        setConnStatus('err', '✗ ' + (error.message || error.code));
+      }
+    } else {
+      setConnStatus('ok', '✓ Connected — ' + (data.length ? data.length+' row(s) found' : 'table ready'));
+    }
+  } catch(e) {
+    setConnStatus('err', '✗ Network error: ' + e.message);
+  }
+}
+
 async function pushCloud() {
-  if (!sbClient) { toast('⚠ Add Supabase credentials in Settings'); return; }
+  if (!sbClient) { toast('⚠ Set up Supabase in Settings → Save & Test first'); return; }
   try {
     toast('Pushing to cloud…');
     const rows = trades.map(t => ({
@@ -148,10 +229,11 @@ async function pushCloud() {
     const { error } = await sbClient.from('tradelog').upsert(rows, { onConflict:'id' });
     if (error) throw error;
     toast('✓ Pushed ' + trades.length + ' trades to cloud');
-  } catch(e) { toast('✗ ' + e.message); }
+  } catch(e) { toast('✗ Push failed: ' + e.message); }
 }
+
 async function pullCloud() {
-  if (!sbClient) { toast('⚠ Add Supabase credentials in Settings'); return; }
+  if (!sbClient) { toast('⚠ Set up Supabase in Settings → Save & Test first'); return; }
   try {
     toast('Pulling from cloud…');
     const { data, error } = await sbClient
@@ -161,8 +243,8 @@ async function pullCloud() {
       trades = data.map(r => JSON.parse(r.payload));
       saveTrades(); renderAll();
       toast('✓ Pulled ' + trades.length + ' trades');
-    } else { toast('No cloud data found'); }
-  } catch(e) { toast('✗ ' + e.message); }
+    } else { toast('ℹ No cloud data found yet — Push first'); }
+  } catch(e) { toast('✗ Pull failed: ' + e.message); }
 }
 
 /* ═══════════════════════════════════════════════
@@ -437,6 +519,20 @@ function openSettings() {
   document.getElementById('s-port').value = cfg.portVal||'';
   document.getElementById('s-url').value  = cfg.sbUrl||'';
   document.getElementById('s-key').value  = cfg.sbKey||'';
+  // Show current connection state
+  const statusEl = document.getElementById('conn-status');
+  if (statusEl) {
+    if (sbClient && cfg.sbUrl && cfg.sbKey) {
+      statusEl.innerHTML = '<div class="conn-badge conn-ok">✓ Credentials saved — use Push/Pull to sync</div>';
+    } else if (cfg.sbUrl || cfg.sbKey) {
+      statusEl.innerHTML = '<div class="conn-badge conn-err">Not tested yet — tap Save &amp; Test</div>';
+    } else {
+      statusEl.innerHTML = '';
+    }
+  }
+  // Sync theme toggle state
+  const th = document.documentElement.getAttribute('data-theme')||'dark';
+  applyTheme(th);
   document.getElementById('mo-settings').classList.add('open');
 }
 function closeSettings() {
@@ -713,6 +809,7 @@ function registerSW() {
    BOOT
 ═══════════════════════════════════════════════ */
 (function init() {
+  loadTheme();     // theme before paint
   loadCfg();
   loadTrades();
   initDropdowns();

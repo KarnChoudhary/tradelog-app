@@ -227,6 +227,18 @@
       <div class="modal-handle"></div>
       <div class="modal-hdr"><div class="modal-title">SETTINGS</div><button class="modal-close" onclick="closeSettings()">✕</button></div>
       <div class="modal-body">
+        <div class="fsec">APPEARANCE</div>
+        <div class="theme-switch">
+          <div class="theme-switch-lbl">
+            <div class="s-lbl" style="font-family:var(--ff-d);font-size:14px;font-weight:600;color:var(--text)">Theme</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px" id="theme-sub">Dark mode active</div>
+          </div>
+          <div class="ts-track" onclick="toggleTheme()" title="Toggle theme">
+            <div class="ts-thumb" id="ts-thumb">🌙</div>
+          </div>
+        </div>
+
+        <div class="f-div"></div>
         <div class="fsec">PORTFOLIO</div>
         <div class="fg" style="margin-bottom:16px">
           <label class="f-lbl">Default Portfolio Value (₹)</label>
@@ -236,11 +248,15 @@
         <div class="fsec">SUPABASE CLOUD SYNC</div>
         <div class="fg" style="margin-bottom:10px">
           <label class="f-lbl">Supabase Project URL</label>
-          <input id="s-url" class="f-ctrl" type="text" placeholder="https://xxxx.supabase.co" oninput="persistSettings()">
+          <input id="s-url" class="f-ctrl" type="text" placeholder="https://xxxx.supabase.co">
         </div>
-        <div class="fg" style="margin-bottom:14px">
+        <div class="fg" style="margin-bottom:10px">
           <label class="f-lbl">Supabase Anon Key</label>
-          <input id="s-key" class="f-ctrl" type="text" placeholder="eyJhbGci…" oninput="persistSettings()">
+          <input id="s-key" class="f-ctrl" type="text" placeholder="eyJhbGci…">
+        </div>
+        <div id="conn-status"></div>
+        <div style="display:flex;gap:9px;margin-top:10px;margin-bottom:6px">
+          <button class="btn btn-sec" style="font-size:12px;padding:10px;flex:1" onclick="saveAndTestSB()">🔗 Save &amp; Test</button>
         </div>
         <div style="display:flex;gap:9px;margin-bottom:14px">
           <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="pushCloud()">⬆ Push to Cloud</button>
