@@ -66,17 +66,18 @@ function daysHeld(bd, sd) {
   return d >= 0 ? d : null;
 }
 function fullCalcs(t) {
-  const pv = t.portVal || cfg.portVal || 0;
-  const q  = calcQty(t.alloc, t.buyPx);
-  const sl = slPct(t.buyPx, t.sl);
-  const ap = allocPct(t.alloc, pv);
+  const pv   = t.portVal || cfg.portVal || 0;
+  const q    = t.qty ?? calcQty(t.alloc, t.buyPx);   // backward compat: old trades had alloc
+  const al   = (t.buyPx && q) ? t.buyPx * q : (t.alloc || null);
+  const sl   = slPct(t.buyPx, t.sl);
+  const ap   = allocPct(al, pv);
   const closed = t.status === 'Closed' && t.sellPx;
-  const pv2 = closed ? calcPnlV(t.buyPx, t.sellPx, q) : null;
-  const pp  = closed ? calcPnlP(t.buyPx, t.sellPx)    : null;
-  const ppp = portPnlP(pv2, pv);
-  const rr  = closed ? calcRR(t.buyPx, t.sellPx, t.sl) : null;
-  const days= daysHeld(t.buyDate, closed ? t.sellDate : null);
-  return { q, sl, ap, pnlV:pv2, pnlP:pp, portPnl:ppp, rr, days };
+  const pv2  = closed ? calcPnlV(t.buyPx, t.sellPx, q) : null;
+  const pp   = closed ? calcPnlP(t.buyPx, t.sellPx)    : null;
+  const ppp  = portPnlP(pv2, pv);
+  const rr   = closed ? calcRR(t.buyPx, t.sellPx, t.sl) : null;
+  const days = daysHeld(t.buyDate, closed ? t.sellDate : null);
+  return { q, al, sl, ap, pnlV:pv2, pnlP:pp, portPnl:ppp, rr, days };
 }
 
 /* ═══════════════════════════════════════════════
@@ -296,7 +297,7 @@ function rebuildSelects() {
 function calc() {
   const bp  = num(document.getElementById('f-buypx').value);
   const sl  = num(document.getElementById('f-sl').value);
-  const al  = num(document.getElementById('f-alloc-input').value);
+  const q   = num(document.getElementById('f-qty-input').value);   // USER enters qty now
   const pv  = num(document.getElementById('f-port').value) || cfg.portVal;
   const sp  = num(document.getElementById('f-sellpx').value);
   const bd  = document.getElementById('f-buydate').value;
@@ -306,15 +307,15 @@ function calc() {
   const slP = slPct(bp, sl);
   setAuto('f-slpct', slP!==null ? f2(slP)+'%' : '—');
 
-  // Alloc %
+  // Allocation ₹ = buy price × qty  (AUTO)
+  const al = (bp && q) ? bp * q : null;
+  setAuto('f-alloc-auto', al!==null ? '₹'+al.toLocaleString('en-IN',{maximumFractionDigits:2}) : '—');
+
+  // Alloc %  (AUTO)
   const alP = allocPct(al, pv);
   setAuto('f-allocpct', alP!==null ? f2(alP)+'%' : '—');
 
-  // Qty
-  const q = calcQty(al, bp);
-  setAuto('f-qty', q!==null ? q.toString() : '—');
-
-  // Days (live count if open)
+  // Days
   const days = daysHeld(bd, formSt==='Closed'&&sd ? sd : null);
   setAuto('f-days', days!==null ? days+'d' : '—');
 
@@ -324,9 +325,9 @@ function calc() {
     const pp  = calcPnlP(bp, sp);
     const ppp = portPnlP(pv2, pv);
     const rr  = calcRR(bp, sp, sl);
-    setAutoCol('f-pnlv',   pv2!==null ? fINR(pv2)              : '—', pv2);
-    setAutoCol('f-pnlp',   pp!==null  ? sgn(pp)+f2(pp)+'%'     : '—', pp);
-    setAutoCol('f-portpnl',ppp!==null ? sgn(ppp)+f2(ppp)+'%'   : '—', ppp);
+    setAutoCol('f-pnlv',   pv2!==null ? fINR(pv2)            : '—', pv2);
+    setAutoCol('f-pnlp',   pp!==null  ? sgn(pp)+f2(pp)+'%'   : '—', pp);
+    setAutoCol('f-portpnl',ppp!==null ? sgn(ppp)+f2(ppp)+'%' : '—', ppp);
     setAuto('f-rr', rr!==null ? f2(rr)+'x' : '—');
   } else {
     ['f-pnlv','f-pnlp','f-portpnl'].forEach(id => {
@@ -388,13 +389,13 @@ function closeTradeMo() {
 }
 function resetForm() {
   ['f-stock','f-buydate','f-buypx','f-emp','f-emd',
-   'f-selldate','f-sellpx','f-sl','f-alloc-input','f-port','f-notes'].forEach(id=>{
+   'f-selldate','f-sellpx','f-sl','f-qty-input','f-port','f-notes'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.value='';
   });
   ['f-setup','f-exit','f-mkt'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.selectedIndex=0;
   });
-  ['f-slpct','f-allocpct','f-qty','f-pnlv','f-pnlp','f-portpnl','f-rr','f-days'].forEach(id=>{
+  ['f-slpct','f-allocpct','f-alloc-auto','f-pnlv','f-pnlp','f-portpnl','f-rr','f-days'].forEach(id=>{
     const el=document.getElementById(id);
     if(el){el.value='—';el.className='f-ctrl is-auto';}
   });
@@ -409,7 +410,7 @@ function fillForm(t) {
   set('f-selldate',t.sellDate);
   set('f-sellpx',  t.sellPx);
   set('f-sl',      t.sl);
-  set('f-alloc-input', t.alloc);
+  set('f-qty-input', t.qty);
   set('f-port',    t.portVal||cfg.portVal||'');
   set('f-setup',   t.setup);
   set('f-exit',    t.exitR);
@@ -435,7 +436,8 @@ function saveTrade() {
     sellDate: document.getElementById('f-selldate').value||null,
     sellPx:   num(document.getElementById('f-sellpx').value),
     sl:       num(document.getElementById('f-sl').value),
-    alloc:    num(document.getElementById('f-alloc-input').value),
+    qty:      num(document.getElementById('f-qty-input').value),
+    get alloc() { return (this.buyPx && this.qty) ? this.buyPx * this.qty : null; },
     portVal:  num(document.getElementById('f-port').value)||cfg.portVal||0,
     setup:    document.getElementById('f-setup').value,
     exitR:    document.getElementById('f-exit').value,
@@ -488,13 +490,13 @@ function openDetailMo(id) {
   let html='<div class="detail-grid">';
   html+=row('Buy Date',     fDate(t.buyDate));
   html+=row('Buy Price',    t.buyPx ? '₹'+t.buyPx : '—');
-  html+=row('EMA Prev Day', t.emPrev ? '₹'+t.emPrev : '—');
-  html+=row('EMA Entry Day',t.emDay  ? '₹'+t.emDay  : '—');
+  html+=row('EM Prev Day',  t.emPrev ? '₹'+t.emPrev : '—');
+  html+=row('EM Entry Day', t.emDay  ? '₹'+t.emDay  : '—');
   html+=row('Sell Date',    fDate(t.sellDate));
   html+=row('Sell Price',   t.sellPx ? '₹'+t.sellPx : '—');
   html+=row('SL Price',     t.sl     ? '₹'+t.sl     : '—');
   html+=pRow('SL %',        c.sl!==null ? f2(c.sl)+'%' : '—', c.sl!==null?-c.sl:null);
-  html+=row('Allocation',   t.alloc  ? fINR(t.alloc) : '—');
+  html+=row('Allocation',   c.al ? fINR(c.al) : '—');
   html+=row('Alloc %',      c.ap!==null ? f2(c.ap)+'%' : '—');
   html+=row('Quantity',     c.q!==null  ? c.q+' shares' : '—');
   html+=row('Portfolio',    fBig(t.portVal||cfg.portVal));
@@ -871,7 +873,7 @@ function tradeCardHTML(t) {
       <div class="tc-m"><span class="ml">Buy</span><span class="mv">₹${t.buyPx||'—'}</span></div>
       <div class="tc-m"><span class="ml">SL</span><span class="mv">${t.sl?'₹'+t.sl:'—'}</span></div>
       <div class="tc-m"><span class="ml">SL%</span><span class="mv val-l">${c.sl!==null?f2(c.sl)+'%':'—'}</span></div>
-      <div class="tc-m"><span class="ml">Alloc</span><span class="mv">${t.alloc?fINR(t.alloc,true):'—'}</span></div>
+      <div class="tc-m"><span class="ml">Alloc</span><span class="mv">${c.al?fINR(c.al,true):'—'}</span></div>
       <div class="tc-m"><span class="ml">Qty</span><span class="mv">${c.q!==null?c.q:'—'}</span></div>
       <div class="tc-m"><span class="ml">${t.status==='Open'?'Days':'R:R'}</span><span class="mv ${pCls(c.rr)}">${t.status==='Open'?(c.days!==null?c.days+'d':'—'):(c.rr!==null?f2(c.rr)+'x':'—')}</span></div>
     </div>
@@ -929,13 +931,13 @@ function renderTable() {
         case 'Type':       return `<td><span class="badge b-${t.type.toLowerCase()}">${t.type==='Virtual'?'VIRT':'REAL'}</span></td>`;
         case 'Buy Date':   return `<td>${fDate(t.buyDate)}</td>`;
         case 'Buy ₹':      return `<td>${t.buyPx?'₹'+t.buyPx:'—'}</td>`;
-        case 'EMA Prev':   return `<td>${t.emPrev?'₹'+t.emPrev:'—'}</td>`;
-        case 'EMA Day':    return `<td>${t.emDay?'₹'+t.emDay:'—'}</td>`;
+        case 'EM Prev':    return `<td>${t.emPrev?'₹'+t.emPrev:'—'}</td>`;
+        case 'EM Day':     return `<td>${t.emDay?'₹'+t.emDay:'—'}</td>`;
         case 'Sell Date':  return `<td>${fDate(t.sellDate)}</td>`;
         case 'Sell ₹':     return `<td>${t.sellPx?'₹'+t.sellPx:'—'}</td>`;
         case 'SL ₹':       return `<td>${t.sl?'₹'+t.sl:'—'}</td>`;
         case 'SL %':       return `<td class="${pCls(c.sl!==null?-c.sl:null)}">${c.sl!==null?f2(c.sl)+'%':'—'}</td>`;
-        case 'Alloc ₹':    return `<td>${t.alloc?fINR(t.alloc,true):'—'}</td>`;
+        case 'Alloc ₹':    return `<td>${c.al?fINR(c.al,true):'—'}</td>`;
         case 'Alloc %':    return `<td>${c.ap!==null?f2(c.ap)+'%':'—'}</td>`;
         case 'Qty':        return `<td>${c.q!==null?c.q:'—'}</td>`;
         case 'P&L ₹':      return `<td class="${pCls(c.pnlV)}">${c.pnlV!==null?fINR(c.pnlV,true):'—'}</td>`;
@@ -960,7 +962,7 @@ function renderTable() {
 // Master feature registry — id matches CSS class `feat-{id}` on form elements
 const FEATURES = [
   { id:'tradeType', label:'Real / Virtual Tag',      desc:'Tag trades as Real or Paper/Virtual',    icon:'🏷️',  group:'Entry',    def:true  },
-  { id:'ema',       label:'EMA Values',              desc:'Record EMA on prev day & entry day',      icon:'📈',  group:'Entry',    def:true  },
+  { id:'ema',       label:'EM Values',               desc:'Record EM on prev day & entry day',       icon:'📈',  group:'Entry',    def:true  },
   { id:'sl',        label:'Stop Loss (SL)',           desc:'SL price and auto-calculated SL %',       icon:'🛡️',  group:'Risk',     def:true  },
   { id:'alloc',     label:'Allocation / Position',   desc:'Allocation ₹, Alloc %, Quantity auto',    icon:'💰',  group:'Risk',     def:true  },
   { id:'portPnl',   label:'Portfolio P&L %',         desc:'P&L as % of total portfolio value',       icon:'📊',  group:'Results',  def:true  },
@@ -1066,8 +1068,8 @@ const TABLE_COLS = [
   { lbl:'Type',       feat:'tradeType' },
   { lbl:'Buy Date',   always:true  },
   { lbl:'Buy ₹',      always:true  },
-  { lbl:'EMA Prev',   feat:'ema'   },
-  { lbl:'EMA Day',    feat:'ema'   },
+  { lbl:'EM Prev',    feat:'ema'   },
+  { lbl:'EM Day',     feat:'ema'   },
   { lbl:'Sell Date',  always:true  },
   { lbl:'Sell ₹',     always:true  },
   { lbl:'SL ₹',       feat:'sl'    },
