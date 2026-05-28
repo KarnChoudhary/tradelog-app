@@ -283,6 +283,28 @@
         <!-- DATA -->
         <div class="f-div"></div>
         <div class="fsec">DATA</div>
+
+        <!-- Bulk CSV import -->
+        <div class="bulk-import-box">
+          <div class="bulk-icon">📊</div>
+          <div class="bulk-info">
+            <div class="bulk-title">Bulk Import via CSV / Excel</div>
+            <div class="bulk-sub">Fill the template in Excel or Google Sheets, then upload here. Preview before saving.</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:9px;margin-bottom:10px">
+          <button class="btn btn-sec" style="font-size:12px;padding:10px;flex:1" onclick="downloadCSVTemplate()">⬇ Download Template</button>
+          <button class="btn btn-primary" style="font-size:12px;padding:10px;flex:1" onclick="document.getElementById('csv-file').click()">⬆ Upload CSV / Excel</button>
+        </div>
+        <input type="file" id="csv-file" accept=".csv,.xlsx,.xls" style="display:none" onchange="handleCSVUpload(this)">
+        <div class="s-info" style="margin-bottom:14px">
+          <div class="s-info-hd">📋 HOW TO USE</div>
+          1. Download the template → fill in Excel or Google Sheets<br>
+          2. Save as <b>.csv</b> (File → Download → CSV) or keep as <b>.xlsx</b><br>
+          3. Upload → review the preview → tap Import
+        </div>
+
+        <!-- JSON backup -->
         <div style="display:flex;gap:9px;margin-bottom:14px">
           <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="exportJSON()">📤 Export JSON</button>
           <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="document.getElementById('imp-file').click()">📥 Import JSON</button>
@@ -299,6 +321,22 @@
         </div>
       </div>
       <div class="modal-foot"><button class="btn btn-primary" onclick="closeSettings()">Done</button></div>
+    </div>
+  </div>
+
+  <!-- ═══ CSV PREVIEW MODAL ═══ -->
+  <div id="mo-csv" class="modal-ov">
+    <div class="modal-sheet" style="max-height:96vh">
+      <div class="modal-handle"></div>
+      <div class="modal-hdr">
+        <div class="modal-title">IMPORT PREVIEW</div>
+        <button class="modal-close" onclick="closeCSVMo()">✕</button>
+      </div>
+      <div class="modal-body" id="csv-preview-body"></div>
+      <div class="modal-foot">
+        <button class="btn btn-sec" onclick="closeCSVMo()">Cancel</button>
+        <button class="btn btn-primary" id="csv-confirm-btn" onclick="confirmCSVImport()">Import All</button>
+      </div>
     </div>
   </div>
 

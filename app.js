@@ -797,7 +797,331 @@ function importJSON(inp) {
 }
 
 /* ═══════════════════════════════════════════════
-   TOAST
+   BULK CSV IMPORT / EXPORT
+═══════════════════════════════════════════════ */
+
+// Column spec: { key, header, required, hint }
+const CSV_COLS = [
+  { key:'stock',    header:'Stock',         required:true,  hint:'e.g. RELIANCE'       },
+  { key:'status',   header:'Status',        required:true,  hint:'Open or Closed'      },
+  { key:'type',     header:'Type',          required:false, hint:'Real or Virtual'      },
+  { key:'buyDate',  header:'Buy Date',      required:true,  hint:'DD/MM/YYYY'          },
+  { key:'buyPx',   header:'Buy Price',      required:true,  hint:'e.g. 2450.50'        },
+  { key:'qty',      header:'Qty',           required:true,  hint:'No. of shares'       },
+  { key:'sl',       header:'SL Price',      required:false, hint:'Stop loss price'     },
+  { key:'portVal',  header:'Portfolio',     required:false, hint:'Total portfolio ₹'   },
+  { key:'sellDate', header:'Sell Date',     required:false, hint:'DD/MM/YYYY if closed'},
+  { key:'sellPx',  header:'Sell Price',     required:false, hint:'If closed'           },
+  { key:'emPrev',   header:'EM Prev Day',   required:false, hint:'EM value prev day'   },
+  { key:'emDay',    header:'EM Entry Day',  required:false, hint:'EM value entry day'  },
+  { key:'setup',    header:'Setup',         required:false, hint:'Chart pattern'       },
+  { key:'exitR',    header:'Exit Reason',   required:false, hint:'Why you exited'      },
+  { key:'mktState', header:'Market State',  required:false, hint:'Market condition'    },
+  { key:'notes',    header:'Notes',         required:false, hint:'Observations'        },
+];
+
+// Pending parsed rows waiting for user to confirm
+let csvPendingRows = [];
+
+/* ── Download blank template ── */
+function downloadCSVTemplate() {
+  const headers = CSV_COLS.map(c => c.header);
+  const hints   = CSV_COLS.map(c => c.required ? `(required) ${c.hint}` : c.hint);
+  // Row 1 = headers, Row 2 = hint/example row (prefixed so it's clearly a guide)
+  const hintRow = CSV_COLS.map(c => c.hint);
+
+  // Sample row
+  const sample = {
+    Stock:'RELIANCE', Status:'Closed', Type:'Real',
+    'Buy Date':'15/01/2025', 'Buy Price':'2450.50', Qty:'10',
+    'SL Price':'2380', Portfolio:'500000',
+    'Sell Date':'28/01/2025', 'Sell Price':'2610',
+    'EM Prev Day':'2420', 'EM Entry Day':'2435',
+    Setup:'VCP – Volatility Contraction', 'Exit Reason':'Target Hit',
+    'Market State':'Confirmed Uptrend – Strong', Notes:'Clean breakout on volume'
+  };
+  const sampleRow = headers.map(h => sample[h] ?? '');
+
+  const rows = [
+    headers,
+    hintRow,
+    sampleRow,
+    // Two blank rows for user to fill
+    headers.map(() => ''),
+    headers.map(() => ''),
+  ];
+
+  const csv = rows.map(r =>
+    r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')
+  ).join('\r\n');
+
+  const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8;' });
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: 'tradelog_template.csv'
+  });
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('Template downloaded — fill row 3 onwards');
+}
+
+/* ── Handle uploaded file ── */
+function handleCSVUpload(inp) {
+  const file = inp.files[0]; if (!file) return;
+  const name = file.name.toLowerCase();
+  inp.value = '';
+
+  if (name.endsWith('.csv')) {
+    const reader = new FileReader();
+    reader.onload = e => parseCSVText(e.target.result);
+    reader.readAsText(file, 'UTF-8');
+  } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+    toast('⚠ For Excel files: File → Download → CSV, then upload the CSV');
+  } else {
+    toast('⚠ Please upload a .csv file');
+  }
+}
+
+/* ── Parse CSV text ── */
+function parseCSVText(text) {
+  // Strip BOM if present
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) { toast('⚠ CSV has no data rows'); return; }
+
+  // Parse all rows
+  const rows = lines.map(parseCSVLine);
+  const headerRow = rows[0].map(h => h.trim());
+
+  // Map header names to CSV_COLS keys (case-insensitive)
+  const colMap = {}; // index → key
+  headerRow.forEach((h, i) => {
+    const col = CSV_COLS.find(c =>
+      c.header.toLowerCase() === h.toLowerCase()
+    );
+    if (col) colMap[i] = col.key;
+  });
+
+  // Check required headers present
+  const missingReq = CSV_COLS
+    .filter(c => c.required)
+    .filter(c => !Object.values(colMap).includes(c.key));
+  if (missingReq.length) {
+    toast(`⚠ Missing columns: ${missingReq.map(c=>c.header).join(', ')}`);
+    return;
+  }
+
+  // Parse data rows — skip row index 1 if it looks like the hints row
+  const dataRows = [];
+  const errors   = [];
+
+  rows.forEach((row, rowIdx) => {
+    if (rowIdx === 0) return; // skip header
+
+    const obj = {};
+    Object.entries(colMap).forEach(([i, key]) => {
+      obj[key] = (row[i] ?? '').trim();
+    });
+
+    // Skip completely empty rows
+    if (!obj.stock && !obj.buyPx && !obj.buyDate) return;
+
+    // Skip hint row (row 2 in template)
+    if (
+      obj.stock?.toLowerCase().includes('e.g.') ||
+      obj.status?.toLowerCase() === 'open or closed' ||
+      obj.buyDate?.toLowerCase().includes('dd/mm')
+    ) return;
+
+    // Validate & coerce
+    const errs = [];
+    if (!obj.stock)                      errs.push('Stock missing');
+    if (!['Open','Closed'].includes(normalizeStatus(obj.status))) errs.push('Status must be Open or Closed');
+    if (!parseDateField(obj.buyDate))    errs.push('Buy Date invalid (use DD/MM/YYYY)');
+    if (isNaN(parseFloat(obj.buyPx)))    errs.push('Buy Price invalid');
+    if (isNaN(parseFloat(obj.qty)))      errs.push('Qty invalid');
+
+    if (errs.length) {
+      errors.push({ row: rowIdx + 1, errs });
+      return;
+    }
+
+    const t = {
+      id:       uid(),
+      stock:    obj.stock.toUpperCase(),
+      status:   normalizeStatus(obj.status),
+      type:     normalizeType(obj.type),
+      buyDate:  parseDateField(obj.buyDate),
+      buyPx:    parseFloat(obj.buyPx),
+      qty:      parseFloat(obj.qty),
+      sl:       parseFloat(obj.sl) || null,
+      portVal:  parseFloat(obj.portVal) || cfg.portVal || 0,
+      sellDate: parseDateField(obj.sellDate),
+      sellPx:   parseFloat(obj.sellPx)  || null,
+      emPrev:   parseFloat(obj.emPrev)  || null,
+      emDay:    parseFloat(obj.emDay)   || null,
+      setup:    obj.setup    || '',
+      exitR:    obj.exitR    || '',
+      mktState: obj.mktState || '',
+      notes:    obj.notes    || '',
+      ts:       Date.now(),
+      upd:      Date.now(),
+    };
+    // Derived alloc
+    t.alloc = t.buyPx * t.qty;
+    dataRows.push(t);
+  });
+
+  if (!dataRows.length && !errors.length) {
+    toast('⚠ No valid data rows found in file');
+    return;
+  }
+
+  csvPendingRows = dataRows;
+  showCSVPreview(dataRows, errors);
+}
+
+/* ── Parse a single CSV line respecting quoted fields ── */
+function parseCSVLine(line) {
+  const result = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQ && line[i+1] === '"') { cur += '"'; i++; }
+      else inQ = !inQ;
+    } else if (ch === ',' && !inQ) {
+      result.push(cur); cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  result.push(cur);
+  return result;
+}
+
+/* ── Date helpers ── */
+function parseDateField(s) {
+  if (!s) return null;
+  // DD/MM/YYYY
+  const m1 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m1) return `${m1[3]}-${m1[2].padStart(2,'0')}-${m1[1].padStart(2,'0')}`;
+  // YYYY-MM-DD (already correct)
+  const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m2) return s;
+  // MM/DD/YYYY
+  const m3 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m3) return `${m3[3]}-${m3[1].padStart(2,'0')}-${m3[2].padStart(2,'0')}`;
+  return null;
+}
+
+function normalizeStatus(s) {
+  if (!s) return 'Open';
+  const l = s.toLowerCase();
+  if (l.includes('close') || l === 'c') return 'Closed';
+  return 'Open';
+}
+function normalizeType(s) {
+  if (!s) return 'Real';
+  const l = s.toLowerCase();
+  if (l.includes('virt') || l.includes('paper') || l === 'v') return 'Virtual';
+  return 'Real';
+}
+
+/* ── Show preview modal ── */
+function showCSVPreview(rows, errors) {
+  const body = document.getElementById('csv-preview-body');
+  const btn  = document.getElementById('csv-confirm-btn');
+  if (!body) return;
+
+  let html = '';
+
+  // Summary banner
+  html += `<div class="csv-summary">
+    <div class="csv-sum-item csv-sum-ok">
+      <div class="csv-sum-num">${rows.length}</div>
+      <div class="csv-sum-lbl">Ready to import</div>
+    </div>
+    <div class="csv-sum-item csv-sum-err">
+      <div class="csv-sum-num">${errors.length}</div>
+      <div class="csv-sum-lbl">Rows with errors</div>
+    </div>
+  </div>`;
+
+  // Errors section
+  if (errors.length) {
+    html += `<div class="csv-err-box">
+      <div class="csv-err-hd">⚠ Skipped rows (fix in your file and re-upload)</div>`;
+    errors.forEach(e => {
+      html += `<div class="csv-err-row">Row ${e.row}: ${e.errs.join(' · ')}</div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Preview table
+  if (rows.length) {
+    html += `<div style="font-family:var(--ff-d);font-size:9px;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin:14px 0 8px">Preview (${rows.length} trades)</div>`;
+    html += `<div class="csv-preview-tbl-wrap"><table class="csv-preview-tbl">
+      <thead><tr>
+        <th>Stock</th><th>Status</th><th>Type</th>
+        <th>Buy Date</th><th>Buy ₹</th><th>Qty</th>
+        <th>Sell Date</th><th>Sell ₹</th><th>SL ₹</th><th>Setup</th>
+      </tr></thead><tbody>`;
+    rows.forEach(t => {
+      const c = fullCalcs(t);
+      html += `<tr>
+        <td style="font-family:var(--ff-d);font-weight:700">${escHtml(t.stock)}</td>
+        <td><span class="badge b-${t.status.toLowerCase()}">${t.status}</span></td>
+        <td><span class="badge b-${t.type.toLowerCase()}">${t.type==='Virtual'?'VIRT':'REAL'}</span></td>
+        <td>${fDate(t.buyDate)}</td>
+        <td>₹${t.buyPx}</td>
+        <td>${t.qty}</td>
+        <td>${fDate(t.sellDate)}</td>
+        <td>${t.sellPx ? '₹'+t.sellPx : '—'}</td>
+        <td class="${pCls(t.sl?-1:null)}">${t.sl ? '₹'+t.sl : '—'}</td>
+        <td style="font-size:11px;color:var(--text2)">${escHtml(t.setup||'—')}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+  }
+
+  body.innerHTML = html;
+  if (btn) btn.textContent = `Import ${rows.length} Trade${rows.length===1?'':'s'}`;
+  document.getElementById('mo-csv').classList.add('open');
+  // Close settings modal so preview is fully visible
+  document.getElementById('mo-settings').classList.remove('open');
+}
+
+function closeCSVMo() {
+  document.getElementById('mo-csv').classList.remove('open');
+  csvPendingRows = [];
+  // Re-open settings
+  document.getElementById('mo-settings').classList.add('open');
+}
+
+function confirmCSVImport() {
+  if (!csvPendingRows.length) { closeCSVMo(); return; }
+  // Merge: skip duplicates based on stock+buyDate+buyPx
+  let added = 0, skipped = 0;
+  csvPendingRows.forEach(t => {
+    const dupe = trades.find(x =>
+      x.stock === t.stock &&
+      x.buyDate === t.buyDate &&
+      x.buyPx === t.buyPx
+    );
+    if (dupe) { skipped++; return; }
+    trades.unshift(t);
+    added++;
+  });
+  saveTrades();
+  csvPendingRows = [];
+  document.getElementById('mo-csv').classList.remove('open');
+  document.getElementById('mo-settings').classList.remove('open');
+  renderAll();
+  let msg = `✓ Imported ${added} trade${added===1?'':'s'}`;
+  if (skipped) msg += ` · ${skipped} skipped (duplicate)`;
+  toast(msg);
+}
 ═══════════════════════════════════════════════ */
 let toastTimer=null;
 function toast(msg) {
