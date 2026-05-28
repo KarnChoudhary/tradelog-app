@@ -139,13 +139,69 @@ function loadTheme() {
 const LS_T='tl_trades', LS_C='tl_cfg';
 function saveTrades() { localStorage.setItem(LS_T, JSON.stringify(trades)); }
 function loadTrades() { trades = JSON.parse(localStorage.getItem(LS_T)||'[]'); }
+
 function persistSettings() {
   cfg.portVal = parseFloat(document.getElementById('s-port').value)||0;
   saveCfg();
 }
+
+function saveCfg() {
+  localStorage.setItem(LS_C, JSON.stringify(cfg));
+}
+
+/* Deep-merge: new keys from src only if NOT already in target */
+function safeMerge(target, src) {
+  Object.keys(src).forEach(k => {
+    if (!(k in target)) {
+      // Key is completely new → add default
+      target[k] = src[k];
+    } else if (
+      typeof src[k] === 'object' && src[k] !== null &&
+      !Array.isArray(src[k]) &&
+      typeof target[k] === 'object' && target[k] !== null &&
+      !Array.isArray(target[k])
+    ) {
+      // Both are plain objects → recurse (only fills missing sub-keys)
+      safeMerge(target[k], src[k]);
+    }
+    // Otherwise: target already has the key → leave user value untouched
+  });
+  return target;
+}
+
 function loadCfg() {
-  const r = localStorage.getItem(LS_C);
-  if (r) cfg = {...cfg,...JSON.parse(r)};
+  const raw = localStorage.getItem(LS_C);
+  if (raw) {
+    try {
+      const stored = JSON.parse(raw);
+      // Start from stored data, then add any missing new keys from default cfg
+      cfg = safeMerge(stored, { portVal:0, sbUrl:'', sbKey:'', features:{}, dropdowns:{} });
+    } catch(e) {
+      // Corrupt storage — keep defaults, don't overwrite yet
+      console.warn('TradeLog: could not parse saved cfg', e);
+    }
+  }
+  // Never call saveCfg() here — only save when user explicitly acts
+}
+
+/* Called at boot to add any brand-new keys introduced in a new version
+   WITHOUT touching anything the user has already set */
+function migrateSettings() {
+  let changed = false;
+  if (!cfg.features || Object.keys(cfg.features).length === 0) {
+    cfg.features = defaultFeatures();
+    changed = true;
+  } else {
+    // Add only NEW feature keys that didn't exist before
+    FEATURES.forEach(ft => {
+      if (!(ft.id in cfg.features)) {
+        cfg.features[ft.id] = ft.def;
+        changed = true;
+      }
+    });
+  }
+  // dropdowns: never auto-initialise to {} here — getters handle missing keys via ?? fallback
+  if (changed) saveCfg();
 }
 
 /* ═══════════════════════════════════════════════
@@ -572,7 +628,7 @@ let ddActiveKey = 'setups';
 function renderDropdownEditor() {
   const wrap = document.getElementById('dd-editor');
   if (!wrap) return;
-  if (!cfg.dropdowns) cfg.dropdowns = {};
+  // NOTE: do NOT mutate cfg.dropdowns here — getters use ?? fallback to defaults
 
   // ── Tab bar
   let tabHtml = '<div class="dd-tabs">';
@@ -677,6 +733,7 @@ function addDdItem() {
   if (!inp) return;
   const val = inp.value.trim();
   if (!val) { toast('⚠ Type an option name first'); return; }
+  // Only create cfg.dropdowns when user actually saves something
   if (!cfg.dropdowns) cfg.dropdowns = {};
   const meta  = DD_META.find(m => m.key === ddActiveKey);
   const items = [...meta.getter()];
@@ -687,7 +744,6 @@ function addDdItem() {
   rebuildSelects();
   inp.value = '';
   renderDropdownEditor();
-  // Scroll list to bottom so user sees the new item
   setTimeout(() => {
     const list = document.getElementById('dd-list');
     if (list) list.scrollTop = list.scrollHeight;
@@ -703,10 +759,6 @@ function resetDdList(key) {
   rebuildSelects();
   renderDropdownEditor();
   toast('✓ Reset to defaults');
-}
-
-function saveCfg() {
-  localStorage.setItem(LS_C, JSON.stringify(cfg));
 }
 
 function escHtml(s) {
@@ -1140,7 +1192,7 @@ function registerSW() {
 (function init() {
   loadTheme();
   loadCfg();
-  if(!cfg.features) cfg.features = defaultFeatures();
+  migrateSettings();   // safely adds new keys, never touches existing user data
   loadTrades();
   initDropdowns();
   initSB();
