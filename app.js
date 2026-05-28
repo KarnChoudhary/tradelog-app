@@ -1,9 +1,9 @@
 'use strict';
 
 /* ═══════════════════════════════════════════════
-   CONSTANTS — DROPDOWNS
+   DROPDOWN DEFAULTS + LIVE GETTERS
 ═══════════════════════════════════════════════ */
-const SETUPS = [
+const DEFAULT_SETUPS = [
   'VCP – Volatility Contraction','Flag & Pole','EMA Pullback (20 EMA)',
   'EMA Pullback (50 EMA)','Cup & Handle','Double Bottom','Double Top',
   'Head & Shoulders','Breakout – Prior High','Breakout – 52W High',
@@ -11,18 +11,23 @@ const SETUPS = [
   'News / Event Based','Trend Reversal','MA Crossover',
   'Support Bounce','Resistance Break','Consolidation Breakout','Other'
 ];
-const EXITS = [
+const DEFAULT_EXITS = [
   'SL Hit','Target Hit','Manual Exit – Planned',
   'Manual Exit – Discretionary','Trailing SL','Partial + Trailing SL',
   'Time-based Exit','News Exit','Other'
 ];
-const MKT_STATES = [
+const DEFAULT_MKT = [
   'Confirmed Uptrend – Strong','Confirmed Uptrend – Moderate',
   'Uptrend Under Pressure','Rally Attempt – Unconfirmed',
   'Market in Correction – Mild','Market in Correction – Severe',
   'Sideways / Rangebound','High Volatility – Choppy',
   'Distribution Phase','Strong Downtrend'
 ];
+
+/* Always read from cfg so user edits reflect immediately */
+const getSetups = () => cfg.dropdowns?.setups    ?? [...DEFAULT_SETUPS];
+const getExits  = () => cfg.dropdowns?.exits     ?? [...DEFAULT_EXITS];
+const getMkt    = () => cfg.dropdowns?.mktStates ?? [...DEFAULT_MKT];
 
 /* ═══════════════════════════════════════════════
    STATE
@@ -135,8 +140,7 @@ function saveTrades() { localStorage.setItem(LS_T, JSON.stringify(trades)); }
 function loadTrades() { trades = JSON.parse(localStorage.getItem(LS_T)||'[]'); }
 function persistSettings() {
   cfg.portVal = parseFloat(document.getElementById('s-port').value)||0;
-  // SB creds are saved explicitly via saveAndTestSB()
-  localStorage.setItem(LS_C, JSON.stringify(cfg));
+  saveCfg();
 }
 function loadCfg() {
   const r = localStorage.getItem(LS_C);
@@ -192,7 +196,7 @@ async function saveAndTestSB() {
   cfg.sbUrl = url;
   cfg.sbKey = key;
   cfg.portVal = parseFloat(document.getElementById('s-port').value)||0;
-  localStorage.setItem(LS_C, JSON.stringify(cfg));
+  saveCfg();
 
   setConnStatus('ing', '⏳ Connecting…');
   const ok = initSB();
@@ -262,19 +266,28 @@ function switchView(v) {
 }
 
 /* ═══════════════════════════════════════════════
-   DROPDOWN INIT
+   DROPDOWN INIT — rebuilds select options from cfg
 ═══════════════════════════════════════════════ */
 function initDropdowns() {
+  rebuildSelects();
+}
+
+function rebuildSelects() {
   const fill = (id, arr) => {
     const sel = document.getElementById(id);
+    if (!sel) return;
+    const prev = sel.value;          // preserve current selection
+    sel.innerHTML = '<option value="">— Select —</option>';
     arr.forEach(v => {
       const o = document.createElement('option');
-      o.value = v; o.textContent = v; sel.appendChild(o);
+      o.value = v; o.textContent = v;
+      sel.appendChild(o);
     });
+    if (prev) sel.value = prev;      // restore if it still exists
   };
-  fill('f-setup', SETUPS);
-  fill('f-exit',  EXITS);
-  fill('f-mkt',   MKT_STATES);
+  fill('f-setup', getSetups());
+  fill('f-exit',  getExits());
+  fill('f-mkt',   getMkt());
 }
 
 /* ═══════════════════════════════════════════════
@@ -532,11 +545,172 @@ function openSettings() {
   const th = document.documentElement.getAttribute('data-theme')||'dark';
   applyTheme(th);
   renderFeatureList();
+  renderDropdownEditor();
   document.getElementById('mo-settings').classList.add('open');
 }
 function closeSettings() {
   document.getElementById('mo-settings').classList.remove('open');
   renderAll();
+}
+
+/* ═══════════════════════════════════════════════
+   DROPDOWN EDITOR
+═══════════════════════════════════════════════ */
+
+// Three managed lists
+const DD_META = [
+  { key:'setups',    label:'Setup / Pattern',  icon:'🔭', getter: getSetups,  defaults: DEFAULT_SETUPS },
+  { key:'exits',     label:'Exit Reason',       icon:'🚪', getter: getExits,   defaults: DEFAULT_EXITS  },
+  { key:'mktStates', label:'Market State',      icon:'🌡️', getter: getMkt,     defaults: DEFAULT_MKT    },
+];
+
+// Which list is being edited right now
+let ddActiveKey = 'setups';
+
+function renderDropdownEditor() {
+  const wrap = document.getElementById('dd-editor');
+  if (!wrap) return;
+  if (!cfg.dropdowns) cfg.dropdowns = {};
+
+  // ── Tab bar
+  let tabHtml = '<div class="dd-tabs">';
+  DD_META.forEach(m => {
+    const active = ddActiveKey === m.key ? ' dd-tab-active' : '';
+    tabHtml += `<div class="dd-tab${active}" onclick="switchDdTab('${m.key}')">${m.icon} ${m.label}</div>`;
+  });
+  tabHtml += '</div>';
+
+  // ── Active list
+  const meta  = DD_META.find(m => m.key === ddActiveKey);
+  const items = meta.getter();
+
+  let listHtml = '<div class="dd-list" id="dd-list">';
+  items.forEach((item, i) => {
+    listHtml += `
+      <div class="dd-item" id="ddi-${i}">
+        <div class="dd-drag">⠿</div>
+        <div class="dd-item-text">${escHtml(item)}</div>
+        <div class="dd-item-actions">
+          <button class="dd-btn dd-edit-btn" onclick="startEditDdItem(${i})" title="Edit">✏️</button>
+          <button class="dd-btn dd-del-btn"  onclick="deleteDdItem(${i})"    title="Remove">✕</button>
+        </div>
+      </div>`;
+  });
+  listHtml += '</div>';
+
+  // ── Add new input
+  const addHtml = `
+    <div class="dd-add-row">
+      <input id="dd-new-input" class="f-ctrl" type="text"
+             placeholder="Type new option and press Add…"
+             onkeydown="if(event.key==='Enter') addDdItem()">
+      <button class="btn btn-primary dd-add-btn" onclick="addDdItem()">Add</button>
+    </div>`;
+
+  // ── Footer buttons
+  const footHtml = `
+    <div class="dd-footer">
+      <button class="feat-reset-btn" onclick="resetDdList('${ddActiveKey}')">↺ Reset to defaults</button>
+    </div>`;
+
+  wrap.innerHTML = tabHtml + listHtml + addHtml + footHtml;
+}
+
+function switchDdTab(key) {
+  ddActiveKey = key;
+  // Cancel any in-progress edit
+  ddEditIndex = null;
+  renderDropdownEditor();
+}
+
+let ddEditIndex = null;
+
+function startEditDdItem(i) {
+  const meta  = DD_META.find(m => m.key === ddActiveKey);
+  const items = meta.getter();
+  const item  = document.getElementById('ddi-'+i);
+  if (!item) return;
+  item.innerHTML = `
+    <div class="dd-drag">⠿</div>
+    <input class="f-ctrl dd-inline-input" id="dd-edit-inp-${i}"
+           value="${escHtml(items[i])}"
+           onkeydown="if(event.key==='Enter') saveDdEdit(${i}); if(event.key==='Escape') renderDropdownEditor()">
+    <div class="dd-item-actions">
+      <button class="dd-btn dd-save-btn" onclick="saveDdEdit(${i})">✓</button>
+      <button class="dd-btn dd-del-btn"  onclick="renderDropdownEditor()">✕</button>
+    </div>`;
+  document.getElementById('dd-edit-inp-'+i)?.focus();
+}
+
+function saveDdEdit(i) {
+  const inp = document.getElementById('dd-edit-inp-'+i);
+  if (!inp) return;
+  const val = inp.value.trim();
+  if (!val) { toast('⚠ Option cannot be empty'); return; }
+  if (!cfg.dropdowns) cfg.dropdowns = {};
+  const meta  = DD_META.find(m => m.key === ddActiveKey);
+  const items = [...meta.getter()];
+  items[i] = val;
+  cfg.dropdowns[ddActiveKey] = items;
+  saveCfg();
+  rebuildSelects();
+  renderDropdownEditor();
+  toast('✓ Updated');
+}
+
+function deleteDdItem(i) {
+  if (!cfg.dropdowns) cfg.dropdowns = {};
+  const meta  = DD_META.find(m => m.key === ddActiveKey);
+  const items = [...meta.getter()];
+  const removed = items.splice(i, 1)[0];
+  cfg.dropdowns[ddActiveKey] = items;
+  saveCfg();
+  rebuildSelects();
+  renderDropdownEditor();
+  toast(`Removed "${removed}"`);
+}
+
+function addDdItem() {
+  const inp = document.getElementById('dd-new-input');
+  if (!inp) return;
+  const val = inp.value.trim();
+  if (!val) { toast('⚠ Type an option name first'); return; }
+  if (!cfg.dropdowns) cfg.dropdowns = {};
+  const meta  = DD_META.find(m => m.key === ddActiveKey);
+  const items = [...meta.getter()];
+  if (items.includes(val)) { toast('⚠ Already exists'); return; }
+  items.push(val);
+  cfg.dropdowns[ddActiveKey] = items;
+  saveCfg();
+  rebuildSelects();
+  inp.value = '';
+  renderDropdownEditor();
+  // Scroll list to bottom so user sees the new item
+  setTimeout(() => {
+    const list = document.getElementById('dd-list');
+    if (list) list.scrollTop = list.scrollHeight;
+  }, 50);
+  toast(`✓ Added "${val}"`);
+}
+
+function resetDdList(key) {
+  if (!cfg.dropdowns) cfg.dropdowns = {};
+  const meta = DD_META.find(m => m.key === key);
+  cfg.dropdowns[key] = [...meta.defaults];
+  saveCfg();
+  rebuildSelects();
+  renderDropdownEditor();
+  toast('✓ Reset to defaults');
+}
+
+function saveCfg() {
+  localStorage.setItem(LS_C, JSON.stringify(cfg));
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 /* ═══════════════════════════════════════════════
