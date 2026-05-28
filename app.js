@@ -519,13 +519,11 @@ function uid() { return 'tl_'+Date.now()+'_'+Math.random().toString(36).slice(2,
 /* ═══════════════════════════════════════════════
    DELETE
 ═══════════════════════════════════════════════ */
-function confirmDelete() { document.getElementById('confirm-ov').classList.add('open'); }
-function closeConfirm()  { document.getElementById('confirm-ov').classList.remove('open'); }
-function doDelete() {
-  if(!editId) return;
-  trades = trades.filter(t=>t.id!==editId);
-  saveTrades(); closeConfirm(); closeTradeMo(); closeDetailMo(); renderAll();
-  toast('Trade deleted');
+function confirmDelete() {
+  window._bulkDeletePending = false;
+  document.querySelector('#confirm-box h3').textContent = 'Delete Trade?';
+  document.querySelector('#confirm-box p').textContent  = 'This action cannot be undone.';
+  document.getElementById('confirm-ov').classList.add('open');
 }
 
 /* ═══════════════════════════════════════════════
@@ -1228,11 +1226,14 @@ function renderDash() {
    TRADE CARD HTML
 ═══════════════════════════════════════════════ */
 function tradeCardHTML(t) {
-  const c=fullCalcs(t);
-  let cls='trade-card';
-  if(t.status==='Open')               cls+=' tc-open';
-  else if(c.pnlV!==null&&c.pnlV>=0)  cls+=' tc-profit';
-  else if(c.pnlV!==null&&c.pnlV<0)   cls+=' tc-loss';
+  const c   = fullCalcs(t);
+  const sel = selectMode && selectedIds.has(t.id);
+  let cls   = 'trade-card';
+  if (selectMode)                         cls += ' selecting';
+  if (sel)                                cls += ' selected';
+  else if (t.status==='Open')             cls += ' tc-open';
+  else if (c.pnlV!==null && c.pnlV>=0)   cls += ' tc-profit';
+  else if (c.pnlV!==null && c.pnlV<0)    cls += ' tc-loss';
 
   const pnlStr = t.status==='Open'
     ? `<span style="color:var(--open-c);font-size:12px;font-family:var(--ff-m)">OPEN · ${c.days!==null?c.days+'d':''}</span>`
@@ -1240,7 +1241,13 @@ function tradeCardHTML(t) {
         ? `<span class="${pCls(c.pnlV)}" style="font-family:var(--ff-m);font-size:14px">${fINR(c.pnlV,true)} &nbsp;${sgn(c.pnlP)}${f2(c.pnlP)}%</span>`
         : '—');
 
-  return `<div class="${cls}" onclick="openDetailMo('${t.id}')">
+  const checkCls = `tc-check${selectMode?' visible':''}${sel?' checked':''}`;
+  const cardClick = selectMode
+    ? `onclick="toggleCardSelect('${t.id}',event)"`
+    : `onclick="openDetailMo('${t.id}')"`;
+
+  return `<div class="${cls}" data-id="${t.id}" ${cardClick}>
+    <div class="${checkCls}" onclick="toggleCardSelect('${t.id}',event)"></div>
     <div class="tc-top">
       <div class="tc-stock">${t.stock}</div>
       <div class="tc-badges">
@@ -1486,13 +1493,129 @@ function renderTableHead() {
 }
 
 /* ═══════════════════════════════════════════════
+   BULK SELECT / DELETE
+═══════════════════════════════════════════════ */
+let selectMode  = false;
+let selectedIds = new Set();
+
+function enterSelectMode() {
+  selectMode = true;
+  selectedIds.clear();
+  // Highlight the Select filter pill
+  document.querySelectorAll('.fp').forEach(x => x.classList.remove('active'));
+  document.getElementById('fp-select')?.classList.add('active');
+  renderTrades();
+  updateBulkToolbar();
+}
+
+function exitSelectMode() {
+  selectMode  = false;
+  selectedIds.clear();
+  curFilter = 'all';
+  document.querySelectorAll('.fp').forEach(x => x.classList.remove('active'));
+  document.querySelector('.fp[data-f="all"]')?.classList.add('active');
+  document.getElementById('fp-select')?.classList.remove('active');
+  renderTrades();
+  updateBulkToolbar();
+}
+
+function toggleCardSelect(id, e) {
+  e.stopPropagation();
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  // Update just this card visually
+  const card = document.querySelector(`.trade-card[data-id="${id}"]`);
+  if (card) {
+    const chk = card.querySelector('.tc-check');
+    if (selectedIds.has(id)) {
+      card.classList.add('selected');
+      chk?.classList.add('checked');
+    } else {
+      card.classList.remove('selected');
+      chk?.classList.remove('checked');
+    }
+  }
+  updateBulkToolbar();
+}
+
+function updateBulkToolbar() {
+  const tb  = document.getElementById('bulk-toolbar');
+  const cnt = document.getElementById('bulk-count');
+  if (!tb) return;
+  if (selectMode && selectedIds.size > 0) {
+    tb.classList.add('show');
+    cnt.textContent = `${selectedIds.size} trade${selectedIds.size===1?'':'s'} selected`;
+  } else {
+    tb.classList.remove('show');
+  }
+}
+
+function bulkDelete() {
+  if (!selectedIds.size) return;
+  const n = selectedIds.size;
+  // Confirm via the existing confirm dialog
+  // Temporarily hijack doDelete for bulk
+  document.querySelector('#confirm-box h3').textContent = `Delete ${n} Trade${n===1?'':'s'}?`;
+  document.querySelector('#confirm-box p').textContent  = `This will permanently remove ${n} selected trade${n===1?'':'s'}.`;
+  document.getElementById('confirm-ov').classList.add('open');
+  // Override confirm action just for this call
+  window._bulkDeletePending = true;
+}
+
+function closeConfirm() {
+  document.getElementById('confirm-ov').classList.remove('open');
+  // Restore normal confirm text
+  document.querySelector('#confirm-box h3').textContent = 'Delete Trade?';
+  document.querySelector('#confirm-box p').textContent  = 'This action cannot be undone.';
+  window._bulkDeletePending = false;
+}
+
+function doDelete() {
+  if (window._bulkDeletePending) {
+    trades = trades.filter(t => !selectedIds.has(t.id));
+    const n = selectedIds.size;
+    saveTrades();
+    exitSelectMode();
+    closeConfirm();
+    renderAll();
+    toast(`🗑 Deleted ${n} trade${n===1?'':'s'}`);
+    window._bulkDeletePending = false;
+    return;
+  }
+  // Single delete (from edit modal)
+  if (!editId) return;
+  trades = trades.filter(t => t.id !== editId);
+  saveTrades();
+  closeConfirm();
+  closeTradeMo();
+  closeDetailMo();
+  renderAll();
+  toast('Trade deleted');
+}
+
+function deleteFromDetail() {
+  // Trigger delete confirm from detail modal
+  editId = detId;
+  window._bulkDeletePending = false;
+  document.querySelector('#confirm-box h3').textContent = 'Delete Trade?';
+  document.querySelector('#confirm-box p').textContent  = 'This action cannot be undone.';
+  document.getElementById('confirm-ov').classList.add('open');
+}
+
+/* ═══════════════════════════════════════════════
    FILTER BAR
 ═══════════════════════════════════════════════ */
-document.querySelectorAll('.fp').forEach(el=>{
-  el.addEventListener('click',()=>{
-    document.querySelectorAll('.fp').forEach(x=>x.classList.remove('active'));
+document.querySelectorAll('.fp[data-f]').forEach(el=>{
+  el.addEventListener('click', () => {
+    if (el.dataset.f === 'select') {
+      if (selectMode) exitSelectMode();
+      else enterSelectMode();
+      return;
+    }
+    if (selectMode) exitSelectMode();
+    document.querySelectorAll('.fp').forEach(x => x.classList.remove('active'));
     el.classList.add('active');
-    curFilter=el.dataset.f;
+    curFilter = el.dataset.f;
     renderTrades();
   });
 });
