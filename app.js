@@ -1122,6 +1122,9 @@ function confirmCSVImport() {
   if (skipped) msg += ` · ${skipped} skipped (duplicate)`;
   toast(msg);
 }
+
+/* ═══════════════════════════════════════════════
+   TOAST
 ═══════════════════════════════════════════════ */
 let toastTimer=null;
 function toast(msg) {
