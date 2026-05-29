@@ -598,9 +598,13 @@ function openDetailMo(id) {
   const t=trades.find(x=>x.id===id); if(!t) return;
   const c=fullCalcs(t);
 
-  // Title with badges
+  // Title with badges + TV link
   document.getElementById('det-title').innerHTML =
-    `${t.stock}&nbsp;<span class="badge b-${t.status.toLowerCase()}">${t.status}</span>&nbsp;<span class="badge b-${t.type.toLowerCase()}">${t.type}</span>`;
+    `${t.stock}&nbsp;<span class="badge b-${t.status.toLowerCase()}">${t.status}</span>&nbsp;<span class="badge b-${t.type.toLowerCase()}">${t.type}</span>
+     &nbsp;<a href="${tvURL(t.stock)}" target="_blank" rel="noopener" class="tv-link-btn" onclick="event.stopPropagation()">
+       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+       TradingView ↗
+     </a>`;
 
   const row=(lbl,val)=>`<div class="dc"><div class="dc-lbl">${lbl}</div><div class="dc-val">${val}</div></div>`;
   const pRow=(lbl,val,n2)=>row(lbl,`<span class="${pCls(n2)}">${val}</span>`);
@@ -1391,6 +1395,17 @@ function renderDash() {
 /* ═══════════════════════════════════════════════
    TRADE CARD HTML
 ═══════════════════════════════════════════════ */
+/* ─── TradingView link helper ─── */
+function tvURL(stock) {
+  // Strip common suffixes users might type, then prefix NSE:
+  const sym = stock.replace(/\.(NS|BO|NSE|BSE)$/i, '').toUpperCase();
+  return `https://www.tradingview.com/chart/?symbol=NSE%3A${encodeURIComponent(sym)}`;
+}
+function openTV(stock, e) {
+  e.stopPropagation();
+  window.open(tvURL(stock), '_blank', 'noopener');
+}
+
 function tradeCardHTML(t) {
   const c   = fullCalcs(t);
   const sel = selectMode && selectedIds.has(t.id);
@@ -1419,6 +1434,10 @@ function tradeCardHTML(t) {
       <div class="tc-badges">
         <span class="badge b-${t.status.toLowerCase()}">${t.status}</span>
         <span class="badge b-${t.type.toLowerCase()}">${t.type==='Virtual'?'VIRT':'REAL'}</span>
+        <button class="tv-btn" onclick="openTV('${t.stock}',event)" title="Open on TradingView">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+          TV
+        </button>
       </div>
     </div>
     <div class="tc-metrics">
@@ -1478,7 +1497,10 @@ function renderTable() {
     const get = (lbl) => {
       switch(lbl) {
         case '#':          return `<td class="td-num" style="text-align:left;position:sticky;left:0;background:var(--bg2);z-index:1">${i+1}</td>`;
-        case 'Stock':      return `<td class="td-stock" style="text-align:left;position:sticky;left:38px;background:var(--bg2);z-index:1">${t.stock}</td>`;
+        case 'Stock':      return `<td class="td-stock" style="text-align:left;position:sticky;left:38px;background:var(--bg2);z-index:1">
+          ${t.stock}
+          <a href="${tvURL(t.stock)}" target="_blank" rel="noopener" class="tv-tbl-link" onclick="event.stopPropagation()" title="Open on TradingView">↗</a>
+        </td>`;
         case 'Status':     return `<td><span class="badge b-${t.status.toLowerCase()}">${t.status}</span></td>`;
         case 'Type':       return `<td><span class="badge b-${t.type.toLowerCase()}">${t.type==='Virtual'?'VIRT':'REAL'}</span></td>`;
         case 'Buy Date':   return `<td>${fDate(t.buyDate)}</td>`;
