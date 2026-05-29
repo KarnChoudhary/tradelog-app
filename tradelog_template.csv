@@ -1,0 +1,4 @@
+﻿Stock,Status,Type,Buy Date,Buy Price,Qty,SL Price,Portfolio,Sell Date,Sell Price,EM Prev Day,EM Entry Day,Setup,Exit Reason,Market State,Notes
+e.g. RELIANCE,Open or Closed,Real or Virtual,DD/MM/YYYY,e.g. 2450.50,No. of shares,Stop loss price,Total portfolio ₹,DD/MM/YYYY if closed,If closed,EM value prev day,EM value entry day,Chart pattern,Why you exited,Market condition,Observations
+RELIANCE,Closed,Real,15/01/2025,2450.5,10,2380,500000,28/01/2025,2610,2420,2435,VCP – Volatility Contraction,Target Hit,Confirmed Uptrend – Strong,Clean breakout on volume
+SJS,Closed,Real,15/01/2025,2450.5,10,2380,500000,28/01/2025,2610,2420,2435,VCP – Volatility Contraction,Target Hit,Confirmed Uptrend – Strong,Clean breakout on volume

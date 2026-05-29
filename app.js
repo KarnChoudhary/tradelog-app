@@ -134,65 +134,112 @@ function loadTheme() {
 }
 
 /* ═══════════════════════════════════════════════
-   STORAGE
+   STORAGE — with automatic backup protection
 ═══════════════════════════════════════════════ */
-const LS_T='tl_trades', LS_C='tl_cfg';
-function saveTrades() { localStorage.setItem(LS_T, JSON.stringify(trades)); }
-function loadTrades() { trades = JSON.parse(localStorage.getItem(LS_T)||'[]'); }
+const LS_T      = 'tl_trades';
+const LS_C      = 'tl_cfg';
+const LS_T_BAK  = 'tl_trades_bak';   // rolling backup written every save
+const LS_C_BAK  = 'tl_cfg_bak';
+const LS_T_PREV = 'tl_trades_prev';  // previous version (one save older)
+
+function saveTrades() {
+  try {
+    const json = JSON.stringify(trades);
+    // Rotate: current → prev backup before overwriting
+    const existing = localStorage.getItem(LS_T);
+    if (existing) {
+      localStorage.setItem(LS_T_PREV, existing);
+    }
+    localStorage.setItem(LS_T, json);
+    localStorage.setItem(LS_T_BAK, json);   // mirror backup
+    localStorage.setItem('tl_last_save', new Date().toISOString());
+  } catch(e) {
+    console.error('TradeLog: save failed', e);
+  }
+}
+
+function loadTrades() {
+  // Try primary, then backup, then prev backup — never silently return []
+  const sources = [LS_T, LS_T_BAK, LS_T_PREV];
+  for (const key of sources) {
+    const raw = localStorage.getItem(key);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        trades = parsed;
+        if (key !== LS_T) {
+          // Recovered from backup — restore primary immediately
+          console.warn(`TradeLog: recovered trades from ${key}`);
+          localStorage.setItem(LS_T, raw);
+          toast(`⚠ Trades recovered from backup (${key})`);
+        }
+        return;
+      }
+    } catch(e) {
+      console.warn(`TradeLog: ${key} corrupt, trying next`, e);
+    }
+  }
+  trades = [];  // genuinely empty — first run
+}
 
 function persistSettings() {
-  cfg.portVal = parseFloat(document.getElementById('s-port').value)||0;
+  cfg.portVal = parseFloat(document.getElementById('s-port').value) || 0;
   saveCfg();
 }
 
 function saveCfg() {
-  localStorage.setItem(LS_C, JSON.stringify(cfg));
+  try {
+    const json = JSON.stringify(cfg);
+    localStorage.setItem(LS_C, json);
+    localStorage.setItem(LS_C_BAK, json);  // mirror backup
+  } catch(e) {
+    console.error('TradeLog: cfg save failed', e);
+  }
 }
 
-/* Deep-merge: new keys from src only if NOT already in target */
+/* Deep-merge: add new keys from src only if NOT already in target */
 function safeMerge(target, src) {
   Object.keys(src).forEach(k => {
     if (!(k in target)) {
-      // Key is completely new → add default
       target[k] = src[k];
     } else if (
-      typeof src[k] === 'object' && src[k] !== null &&
-      !Array.isArray(src[k]) &&
-      typeof target[k] === 'object' && target[k] !== null &&
-      !Array.isArray(target[k])
+      typeof src[k] === 'object' && src[k] !== null && !Array.isArray(src[k]) &&
+      typeof target[k] === 'object' && target[k] !== null && !Array.isArray(target[k])
     ) {
-      // Both are plain objects → recurse (only fills missing sub-keys)
       safeMerge(target[k], src[k]);
     }
-    // Otherwise: target already has the key → leave user value untouched
   });
   return target;
 }
 
 function loadCfg() {
-  const raw = localStorage.getItem(LS_C);
-  if (raw) {
+  const sources = [LS_C, LS_C_BAK];
+  for (const key of sources) {
+    const raw = localStorage.getItem(key);
+    if (!raw) continue;
     try {
       const stored = JSON.parse(raw);
-      // Start from stored data, then add any missing new keys from default cfg
       cfg = safeMerge(stored, { portVal:0, sbUrl:'', sbKey:'', features:{}, dropdowns:{} });
+      if (key !== LS_C) {
+        console.warn('TradeLog: cfg recovered from backup');
+        localStorage.setItem(LS_C, raw);
+      }
+      return;
     } catch(e) {
-      // Corrupt storage — keep defaults, don't overwrite yet
-      console.warn('TradeLog: could not parse saved cfg', e);
+      console.warn(`TradeLog: ${key} corrupt, trying next`, e);
     }
   }
-  // Never call saveCfg() here — only save when user explicitly acts
+  // No saved cfg — fresh start, keep defaults
 }
 
-/* Called at boot to add any brand-new keys introduced in a new version
-   WITHOUT touching anything the user has already set */
+/* Called at boot: adds new keys introduced by patches, never wipes existing data */
 function migrateSettings() {
   let changed = false;
   if (!cfg.features || Object.keys(cfg.features).length === 0) {
     cfg.features = defaultFeatures();
     changed = true;
   } else {
-    // Add only NEW feature keys that didn't exist before
     FEATURES.forEach(ft => {
       if (!(ft.id in cfg.features)) {
         cfg.features[ft.id] = ft.def;
@@ -200,9 +247,26 @@ function migrateSettings() {
       }
     });
   }
-  // dropdowns: never auto-initialise to {} here — getters handle missing keys via ?? fallback
   if (changed) saveCfg();
 }
+
+/* Manual recovery helper — callable from browser console */
+window.tlRecover = function() {
+  const sources = [LS_T, LS_T_BAK, LS_T_PREV];
+  console.table(sources.map(k => {
+    const raw = localStorage.getItem(k);
+    let count = 0;
+    try { count = raw ? JSON.parse(raw).length : 0; } catch(e) {}
+    return { key: k, trades: count, size: raw ? raw.length + ' chars' : 'empty' };
+  }));
+  console.log('To restore from backup: tlRestoreFrom("tl_trades_bak")');
+};
+window.tlRestoreFrom = function(key) {
+  const raw = localStorage.getItem(key);
+  if (!raw) { console.error('Key not found:', key); return; }
+  localStorage.setItem(LS_T, raw);
+  location.reload();
+};
 
 /* ═══════════════════════════════════════════════
    SUPABASE
@@ -602,6 +666,7 @@ function openSettings() {
   applyTheme(th);
   renderFeatureList();
   renderDropdownEditor();
+  updateBackupStatus();
   document.getElementById('mo-settings').classList.add('open');
 }
 function closeSettings() {
@@ -792,6 +857,107 @@ function importJSON(inp) {
     } catch(err){ toast('✗ Invalid file'); }
   };
   r.readAsText(file); inp.value='';
+}
+
+/* ═══════════════════════════════════════════════
+   BACKUP STATUS & RECOVERY UI
+═══════════════════════════════════════════════ */
+function updateBackupStatus() {
+  const el = document.getElementById('backup-status');
+  if (!el) return;
+
+  const keys = [
+    { k: LS_T,      label: 'Primary'  },
+    { k: LS_T_BAK,  label: 'Backup'   },
+    { k: LS_T_PREV, label: 'Previous' },
+  ];
+
+  let html = '';
+  keys.forEach(({ k, label }) => {
+    const raw = localStorage.getItem(k);
+    let count = 0, valid = false;
+    try { const p = JSON.parse(raw||'null'); if (Array.isArray(p)) { count = p.length; valid = true; } } catch(e) {}
+    const col   = valid ? 'var(--profit)' : 'var(--text3)';
+    const state = valid ? `${count} trade${count===1?'':'s'}` : 'empty';
+    html += `<span style="color:${col};font-weight:600">${label}:</span> ${state} &nbsp;&nbsp;`;
+  });
+
+  const lastSave = localStorage.getItem('tl_last_save');
+  if (lastSave) {
+    const d = new Date(lastSave);
+    html += `<br>Last saved: ${d.toLocaleString('en-IN')}`;
+  }
+  el.innerHTML = html;
+}
+
+function showRecoveryOptions() {
+  const body = document.getElementById('recovery-body');
+  if (!body) return;
+
+  const keys = [
+    { k: LS_T,      label: 'Primary store',          icon: '💾' },
+    { k: LS_T_BAK,  label: 'Mirror backup',           icon: '🔒' },
+    { k: LS_T_PREV, label: 'Previous save (1 ago)',   icon: '⏪' },
+  ];
+
+  let html = `<div style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.6">
+    TradeLog keeps 3 copies of your trades at all times. If one is damaged or empty, restore from another.
+  </div>`;
+
+  keys.forEach(({ k, label, icon }) => {
+    const raw = localStorage.getItem(k);
+    let count = 0, valid = false, preview = '';
+    try {
+      const p = JSON.parse(raw || 'null');
+      if (Array.isArray(p)) {
+        valid = true; count = p.length;
+        if (p.length > 0) {
+          preview = p.slice(0,3).map(t => t.stock).join(', ') + (p.length > 3 ? `… +${p.length-3}` : '');
+        }
+      }
+    } catch(e) {}
+
+    const statusCol = valid && count > 0 ? 'var(--profit)' : 'var(--text3)';
+    html += `<div class="recovery-row">
+      <div class="recovery-info">
+        <div class="recovery-label">${icon} ${label}</div>
+        <div class="recovery-count" style="color:${statusCol}">
+          ${valid ? `${count} trade${count===1?'':'s'}` : 'empty / corrupt'}
+        </div>
+        ${preview ? `<div class="recovery-preview">${preview}</div>` : ''}
+      </div>
+      <button class="btn btn-primary" style="font-size:12px;padding:9px 13px;flex:0;white-space:nowrap"
+        ${(!valid || count===0) ? 'disabled style="opacity:.4;font-size:12px;padding:9px 13px;flex:0"' : ''}
+        onclick="restoreFrom('${k}')">
+        Restore
+      </button>
+    </div>`;
+  });
+
+  body.innerHTML = html;
+  document.getElementById('mo-recovery').classList.add('open');
+}
+
+function closeRecovery() {
+  document.getElementById('mo-recovery').classList.remove('open');
+}
+
+function restoreFrom(key) {
+  const raw = localStorage.getItem(key);
+  if (!raw) { toast('⚠ No data in that backup'); return; }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error('not array');
+    // Write to primary
+    localStorage.setItem(LS_T, raw);
+    localStorage.setItem(LS_T_BAK, raw);
+    trades = parsed;
+    renderAll();
+    closeRecovery();
+    toast(`✓ Restored ${parsed.length} trades`);
+  } catch(e) {
+    toast('✗ Backup data is corrupt');
+  }
 }
 
 /* ═══════════════════════════════════════════════

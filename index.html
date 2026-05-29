@@ -65,6 +65,13 @@
         <div class="fp" data-f="loss">Loss</div>
         <div class="fp" data-f="real">Real</div>
         <div class="fp" data-f="virtual">Virtual</div>
+        <div class="fp" data-f="select" id="fp-select">☑ Select</div>
+      </div>
+      <!-- Bulk delete toolbar — visible only when cards are selected -->
+      <div id="bulk-toolbar">
+        <div class="bulk-count" id="bulk-count">0 selected</div>
+        <button class="bulk-cancel-btn" onclick="exitSelectMode()">Cancel</button>
+        <button class="bulk-del-btn"    onclick="bulkDelete()">🗑 Delete</button>
       </div>
       <div id="trades-list"></div>
     </section>
@@ -211,8 +218,11 @@
       </div>
       <div class="modal-body" id="det-body"></div>
       <div class="modal-foot">
+        <button class="btn btn-del" onclick="deleteFromDetail()" title="Delete trade" style="flex:0;padding:13px 16px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>
+        </button>
         <button class="btn btn-sec" onclick="closeDetailMo()">Close</button>
-        <button class="btn btn-primary" onclick="editFromDetail()">Edit Trade</button>
+        <button class="btn btn-primary" onclick="editFromDetail()">Edit</button>
       </div>
     </div>
   </div>
@@ -284,6 +294,13 @@
         <div class="f-div"></div>
         <div class="fsec">DATA</div>
 
+        <!-- Data safety info -->
+        <div class="safety-box">
+          <div style="font-family:var(--ff-d);font-size:12px;font-weight:700;color:var(--profit);margin-bottom:6px">🛡 Auto-Backup Active</div>
+          <div id="backup-status" style="font-size:11px;color:var(--text2);line-height:1.7"></div>
+          <button class="feat-reset-btn" style="margin-top:8px" onclick="showRecoveryOptions()">↺ Restore from Backup</button>
+        </div>
+
         <!-- Bulk CSV import -->
         <div class="bulk-import-box">
           <div class="bulk-icon">📊</div>
@@ -321,6 +338,21 @@
         </div>
       </div>
       <div class="modal-foot"><button class="btn btn-primary" onclick="closeSettings()">Done</button></div>
+    </div>
+  </div>
+
+  <!-- ═══ RECOVERY MODAL ═══ -->
+  <div id="mo-recovery" class="modal-ov">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-hdr">
+        <div class="modal-title">↺ RESTORE FROM BACKUP</div>
+        <button class="modal-close" onclick="closeRecovery()">✕</button>
+      </div>
+      <div class="modal-body" id="recovery-body"></div>
+      <div class="modal-foot">
+        <button class="btn btn-sec" onclick="closeRecovery()">Cancel</button>
+      </div>
     </div>
   </div>
 

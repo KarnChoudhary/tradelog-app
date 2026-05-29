@@ -5,13 +5,13 @@
 :root{
   --bg:#060b14;--bg2:#0a1422;--bg3:#0f1d30;--bg4:#14263e;--bg5:#1a3050;
   --border:rgba(0,180,255,.10);--border2:rgba(0,180,255,.22);--border3:rgba(0,180,255,.35);
-  --text:#d4e8f8;--text2:#6a8fad;--text3:#344f6a;--text4:#1e3348;
+  --text:#e8f4ff;--text2:#90b8d8;--text3:#6090b8;--text4:#2a4a6a;
   --profit:#00e676;--profit-dim:rgba(0,230,118,.10);--profit-bdr:rgba(0,230,118,.28);
   --loss:#ff4560;--loss-dim:rgba(255,69,96,.10);--loss-bdr:rgba(255,69,96,.28);
   --accent:#00b4ff;--accent-dim:rgba(0,180,255,.10);--accent-bdr:rgba(0,180,255,.28);
   --warn:#ffa726;--warn-dim:rgba(255,167,38,.10);
   --open-c:#29b6f6;--open-dim:rgba(41,182,246,.12);--open-bdr:rgba(41,182,246,.30);
-  --closed-c:#78909c;--closed-dim:rgba(120,144,156,.12);
+  --closed-c:#90a4ae;--closed-dim:rgba(144,164,174,.12);
   --real-c:#ffd54f;--real-dim:rgba(255,213,79,.10);
   --virt-c:#ce93d8;--virt-dim:rgba(206,147,216,.10);
   --grid-line:rgba(0,180,255,.025);
@@ -23,19 +23,19 @@
 
 /* ══ LIGHT THEME */
 [data-theme="light"]{
-  --bg:#f0f4f8;--bg2:#ffffff;--bg3:#e8eef5;--bg4:#d8e4ef;--bg5:#c8d8e8;
-  --border:rgba(0,100,180,.12);--border2:rgba(0,100,180,.25);--border3:rgba(0,100,180,.40);
-  --text:#0d2137;--text2:#3a6080;--text3:#7a9ab5;--text4:#a8c0d0;
-  --profit:#00875a;--profit-dim:rgba(0,135,90,.10);--profit-bdr:rgba(0,135,90,.30);
-  --loss:#d63248;--loss-dim:rgba(214,50,72,.10);--loss-bdr:rgba(214,50,72,.30);
-  --accent:#0077cc;--accent-dim:rgba(0,119,204,.10);--accent-bdr:rgba(0,119,204,.30);
-  --warn:#b06000;--warn-dim:rgba(176,96,0,.10);
-  --open-c:#0077bb;--open-dim:rgba(0,119,187,.10);--open-bdr:rgba(0,119,187,.30);
-  --closed-c:#546e7a;--closed-dim:rgba(84,110,122,.10);
-  --real-c:#8a6400;--real-dim:rgba(138,100,0,.10);
-  --virt-c:#6a3f8a;--virt-dim:rgba(106,63,138,.10);
-  --grid-line:rgba(0,100,180,.04);
-  --shadow:rgba(0,50,100,.12);
+  --bg:#eef2f7;--bg2:#ffffff;--bg3:#e2eaf3;--bg4:#cfdaeb;--bg5:#bccde0;
+  --border:rgba(0,80,160,.13);--border2:rgba(0,80,160,.26);--border3:rgba(0,80,160,.40);
+  --text:#06192e;--text2:#1e4a72;--text3:#2d6090;--text4:#9ab8d0;
+  --profit:#007a46;--profit-dim:rgba(0,122,70,.10);--profit-bdr:rgba(0,122,70,.32);
+  --loss:#c0202e;--loss-dim:rgba(192,32,46,.10);--loss-bdr:rgba(192,32,46,.32);
+  --accent:#005faa;--accent-dim:rgba(0,95,170,.10);--accent-bdr:rgba(0,95,170,.32);
+  --warn:#8a4800;--warn-dim:rgba(138,72,0,.10);
+  --open-c:#005a99;--open-dim:rgba(0,90,153,.10);--open-bdr:rgba(0,90,153,.30);
+  --closed-c:#3d5a6a;--closed-dim:rgba(61,90,106,.10);
+  --real-c:#6a4800;--real-dim:rgba(106,72,0,.10);
+  --virt-c:#56287a;--virt-dim:rgba(86,40,122,.10);
+  --grid-line:rgba(0,80,160,.04);
+  --shadow:rgba(0,40,90,.14);
 }
 [data-theme="light"] body::before{
   background-image:linear-gradient(var(--grid-line) 1px,transparent 1px),
@@ -338,6 +338,69 @@ select.f-ctrl option{background:var(--bg3)}
 .dd-add-btn{flex:0;padding:9px 14px;font-size:13px;white-space:nowrap}
 
 .dd-footer{margin-top:6px}
+/* ═══ BULK DELETE TOOLBAR */
+#bulk-toolbar{
+  position:sticky;top:0;z-index:40;
+  display:none;align-items:center;gap:10px;
+  background:var(--loss-dim);border:1px solid var(--loss-bdr);
+  border-radius:var(--r);padding:10px 13px;margin-bottom:10px;
+  animation:fadeUp .2s var(--ease);
+}
+#bulk-toolbar.show{display:flex}
+.bulk-count{
+  flex:1;font-family:var(--ff-d);font-size:14px;
+  font-weight:700;color:var(--loss);letter-spacing:.5px;
+}
+.bulk-del-btn{
+  padding:8px 14px;border-radius:var(--r-sm);
+  background:var(--loss);border:none;color:#fff;
+  font-family:var(--ff-d);font-size:13px;font-weight:700;
+  letter-spacing:1px;cursor:pointer;
+  transition:all .18s;flex-shrink:0;
+}
+.bulk-del-btn:active{opacity:.8}
+.bulk-cancel-btn{
+  padding:8px 12px;border-radius:var(--r-sm);
+  background:transparent;border:1px solid var(--border2);
+  color:var(--text2);font-family:var(--ff-d);font-size:13px;
+  font-weight:600;cursor:pointer;flex-shrink:0;
+}
+
+/* Checkbox on trade card */
+.tc-check{
+  position:absolute;top:10px;left:10px;
+  width:20px;height:20px;border-radius:4px;
+  border:2px solid var(--border2);background:var(--bg3);
+  display:none;align-items:center;justify-content:center;
+  cursor:pointer;transition:all .15s;flex-shrink:0;z-index:5;
+}
+.tc-check.visible{display:flex}
+.tc-check.checked{background:var(--loss);border-color:var(--loss)}
+.tc-check.checked::after{content:'✓';color:#fff;font-size:12px;font-weight:700;line-height:1}
+.trade-card.selecting{padding-left:38px}
+.trade-card.selected{
+  background:var(--loss-dim) !important;
+  border-left-color:var(--loss) !important;
+  border-color:var(--loss-bdr) !important;
+}
+
+/* ═══ DATA SAFETY BOX */
+.safety-box{
+  background:var(--profit-dim);border:1px solid var(--profit-bdr);
+  border-radius:var(--r);padding:12px;margin-bottom:14px;
+}
+
+/* ═══ RECOVERY MODAL */
+.recovery-row{
+  display:flex;align-items:center;gap:12px;
+  padding:13px 0;border-bottom:1px solid var(--border);
+}
+.recovery-row:last-child{border-bottom:none}
+.recovery-info{flex:1;min-width:0}
+.recovery-label{font-family:var(--ff-d);font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px}
+.recovery-count{font-family:var(--ff-m);font-size:13px;margin-bottom:2px}
+.recovery-preview{font-size:11px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 /* ═══ BULK IMPORT BOX */
 .bulk-import-box{display:flex;align-items:flex-start;gap:12px;padding:12px;background:var(--accent-dim);border:1px solid var(--accent-bdr);border-radius:var(--r);margin-bottom:10px}
 .bulk-icon{font-size:26px;line-height:1;flex-shrink:0}
