@@ -1580,175 +1580,165 @@ function renderAnalytics() {
 
 /* ═══════════════════════════════════════════════
    PDF EXPORT
-═══════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════
-   LIVE PRICE FETCH — robust multi-endpoint version
+   LIVE PRICE FETCH — Stooq primary, Yahoo fallback
 ═══════════════════════════════════════════════ */
 
-// Proxy wrappers — each takes a full target URL and returns the proxied URL
 const CORS_PROXIES = [
-  { name:'AllOrigins',  wrap: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
-  { name:'CodeTabs',    wrap: u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
-  { name:'CorsProxy.io',wrap: u => `https://corsproxy.io/?${encodeURIComponent(u)}` },
-  { name:'YaDN',        wrap: u => `https://yacdn.org/proxy/${u}` },
+  { name:'AllOrigins', wrap: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
+  { name:'CodeTabs',   wrap: u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
 ];
 
-// Two Yahoo Finance endpoint styles to try per symbol
-function yahooEndpoints(sym) {
-  const nseSym = sym.replace(/\.(NS|BO|NSE|BSE)$/i,'').toUpperCase() + '.NS';
+function buildEndpoints(sym) {
+  const clean    = sym.replace(/\.(NS|BO|NSE|BSE|IN)$/i,'').toUpperCase();
+  const stooqSym = clean.toLowerCase() + '.in';
+  const yahooSym = clean + '.NS';
   return [
-    // v7 quote — simpler JSON, more stable
-    `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(nseSym)}&fields=regularMarketPrice,regularMarketChangePercent,regularMarketPreviousClose`,
-    // v8 chart — fallback
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(nseSym)}?interval=1d&range=1d`,
+    { label:'Stooq-daily', url:`https://stooq.com/q/d/l/?s=${stooqSym}&i=d`, parse:parseStooq },
+    { label:'Stooq-live',  url:`https://stooq.com/q/l/?s=${stooqSym}&f=sd2t2ohlcv&h&e=csv`, parse:parseStooqLive },
+    { label:'Yahoo-v7',    url:`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(yahooSym)}&fields=regularMarketPrice,regularMarketChangePercent`, parse:parseYahooV7 },
+    { label:'Yahoo-v8',    url:`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1d&range=2d`, parse:parseYahooV8 },
   ];
 }
 
-function parseYahooResponse(data, endpoint) {
-  // v7 quote response
-  if (data?.quoteResponse?.result?.[0]) {
-    const q = data.quoteResponse.result[0];
-    const price = q.regularMarketPrice;
-    const chg   = q.regularMarketChangePercent;
-    if (!price) throw new Error('v7: price null');
-    return { price: (+price).toFixed(2), chg: +(+chg).toFixed(2) };
-  }
-  // v8 chart response
-  if (data?.chart?.result?.[0]) {
-    const meta  = data.chart.result[0].meta;
-    const price = meta.regularMarketPrice ?? meta.previousClose;
-    const prev  = meta.chartPreviousClose ?? meta.regularMarketPreviousClose ?? meta.previousClose;
-    if (!price) throw new Error('v8: price null');
-    const chg = prev ? (price - prev) / prev * 100 : 0;
-    return { price: (+price).toFixed(2), chg: +(+chg).toFixed(2) };
-  }
-  // Error embedded in response
-  const err = data?.chart?.error?.description || data?.quoteResponse?.error || 'Unknown structure';
-  throw new Error(String(err));
+function parseStooq(text) {
+  const rows = text.trim().split('\n').filter(l => l && !l.startsWith('Date'));
+  if (!rows.length) throw new Error('Stooq: no data rows');
+  const pr  = r => { const c=r.split(','); return { close:parseFloat(c[4]) }; };
+  const last = pr(rows[rows.length-1]);
+  const prev = rows.length>=2 ? pr(rows[rows.length-2]) : null;
+  if (isNaN(last.close)) throw new Error('Stooq: close NaN');
+  const chg = prev&&prev.close ? (last.close-prev.close)/prev.close*100 : 0;
+  return { price:last.close.toFixed(2), chg:+chg.toFixed(2) };
 }
 
-// Debug log
+function parseStooqLive(text) {
+  const rows = text.trim().split('\n').filter(l=>l&&!l.toLowerCase().startsWith('symbol'));
+  if (!rows.length) throw new Error('Stooq live: no data');
+  const cols  = rows[0].split(',');
+  const close = parseFloat(cols[6]);
+  const open  = parseFloat(cols[3]);
+  if (isNaN(close)) throw new Error('Stooq live: close NaN');
+  const chg = open ? (close-open)/open*100 : 0;
+  return { price:close.toFixed(2), chg:+chg.toFixed(2) };
+}
+
+function parseYahooV7(text) {
+  const data = JSON.parse(text);
+  const q = data?.quoteResponse?.result?.[0];
+  if (!q) throw new Error('Yahoo v7: no result — '+(data?.quoteResponse?.error||'unknown'));
+  if (!q.regularMarketPrice) throw new Error('Yahoo v7: price null');
+  return { price:(+q.regularMarketPrice).toFixed(2), chg:+(+(q.regularMarketChangePercent||0)).toFixed(2) };
+}
+
+function parseYahooV8(text) {
+  const data = JSON.parse(text);
+  const result = data?.chart?.result?.[0];
+  if (!result) throw new Error('Yahoo v8: '+(data?.chart?.error?.description||'no result'));
+  const meta  = result.meta;
+  const price = meta.regularMarketPrice ?? meta.previousClose;
+  const prev  = meta.chartPreviousClose ?? meta.regularMarketPreviousClose ?? meta.previousClose;
+  if (!price) throw new Error('Yahoo v8: price null');
+  const chg = prev ? (price-prev)/prev*100 : 0;
+  return { price:(+price).toFixed(2), chg:+chg.toFixed(2) };
+}
+
+/* ─── Debug log ─── */
 const lpLog = [];
 function lpDebug(msg, type='info') {
-  lpLog.unshift({ ts: new Date().toLocaleTimeString('en-IN'), msg, type });
-  if (lpLog.length > 80) lpLog.pop();
+  lpLog.unshift({ ts:new Date().toLocaleTimeString('en-IN'), msg, type });
+  if (lpLog.length>100) lpLog.pop();
   renderDebugLog();
 }
-
 function renderDebugLog() {
   const panel = document.getElementById('lp-debug-log');
   if (!panel) return;
-  if (!lpLog.length) { panel.innerHTML = '<div class="dbg-empty">Tap Fetch or test a symbol</div>'; return; }
-  panel.innerHTML = lpLog.map(e => {
+  if (!lpLog.length) { panel.innerHTML='<div class="dbg-empty">Tap Fetch or test a symbol</div>'; return; }
+  panel.innerHTML = lpLog.map(e=>{
     const col = e.type==='ok'?'var(--profit)':e.type==='err'?'var(--loss)':e.type==='warn'?'var(--warn)':'var(--text2)';
     return `<div class="dbg-row"><span class="dbg-ts">${e.ts}</span><span class="dbg-msg" style="color:${col}">${escHtml(e.msg)}</span></div>`;
   }).join('');
 }
 
-// Timeout-safe fetch (works on old Android WebViews)
+/* ─── Timeout-safe fetch ─── */
 function fetchWithTimeout(url, ms=10000) {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, {
-    signal: ctrl.signal,
-    headers: { 'Accept': 'application/json' },
-  }).finally(() => clearTimeout(t));
+  const t = setTimeout(()=>ctrl.abort(), ms);
+  return fetch(url,{signal:ctrl.signal,headers:{Accept:'*/*'}}).finally(()=>clearTimeout(t));
 }
 
+/* ─── Fetch single symbol ─── */
 async function fetchSymbolPrice(sym) {
-  const cleanSym = sym.replace(/\.(NS|BO|NSE|BSE)$/i,'').toUpperCase();
-  const endpoints = yahooEndpoints(cleanSym);
-
-  for (let ei = 0; ei < endpoints.length; ei++) {
-    const target = endpoints[ei];
-    const epLabel = ei===0 ? 'v7-quote' : 'v8-chart';
-    for (let pi = 0; pi < CORS_PROXIES.length; pi++) {
-      const proxy  = CORS_PROXIES[pi];
-      const proxyURL = proxy.wrap(target);
-      lpDebug(`[${cleanSym}] ${proxy.name} / ${epLabel}`);
+  const clean = sym.replace(/\.(NS|BO|NSE|BSE|IN)$/i,'').toUpperCase();
+  for (const ep of buildEndpoints(clean)) {
+    for (const proxy of CORS_PROXIES) {
+      const purl = proxy.wrap(ep.url);
+      lpDebug(`[${clean}] ${proxy.name} / ${ep.label}`);
       try {
-        const res = await fetchWithTimeout(proxyURL, 9000);
-        lpDebug(`[${cleanSym}] HTTP ${res.status} ← ${proxy.name}`);
+        const res  = await fetchWithTimeout(purl, 9000);
+        lpDebug(`[${clean}] HTTP ${res.status} ← ${proxy.name}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const text = await res.text();
-        if (!text || text.trim().length < 10) throw new Error('Empty response');
-        let data;
-        try { data = JSON.parse(text); }
-        catch(pe) { throw new Error(`Not JSON: ${text.slice(0,60)}`); }
-        const result = parseYahooResponse(data, epLabel);
-        result.ts    = Date.now();
-        result.proxy = proxy.name;
-        result.ep    = epLabel;
-        lpDebug(`[${cleanSym}] ✓ ₹${result.price} (${result.chg>=0?'+':''}${result.chg}%) via ${proxy.name}/${epLabel}`, 'ok');
-        return result;
+        if (!text||text.trim().length<5) throw new Error('Empty response');
+        const r  = ep.parse(text);
+        r.ts  = Date.now(); r.via = `${proxy.name}/${ep.label}`;
+        lpDebug(`[${clean}] ✓ ₹${r.price} (${r.chg>=0?'+':''}${r.chg}%) via ${r.via}`, 'ok');
+        return r;
       } catch(e) {
-        const isLast = ei===endpoints.length-1 && pi===CORS_PROXIES.length-1;
-        lpDebug(`[${cleanSym}] ✗ ${proxy.name}/${epLabel}: ${e.message}`, isLast?'err':'warn');
-        await new Promise(r => setTimeout(r, 300));
+        lpDebug(`[${clean}] ✗ ${proxy.name}/${ep.label}: ${e.message}`, 'warn');
+        await new Promise(r=>setTimeout(r,250));
       }
     }
   }
+  lpDebug(`[${clean}] ✗ All sources exhausted`, 'err');
   return null;
 }
 
+/* ─── Fetch all open trades ─── */
 async function fetchOpenPrices(manual=false) {
-  if (!featOn('livePrice') && !manual) return;
-  const openTrades = trades.filter(t => t.status==='Open' && t.stock);
-  if (!openTrades.length) {
-    lpDebug('No open trades to fetch', 'warn');
-    renderDebugLog(); return;
-  }
+  if (!featOn('livePrice')&&!manual) return;
+  const openTrades = trades.filter(t=>t.status==='Open'&&t.stock);
+  if (!openTrades.length) { lpDebug('No open trades','warn'); renderDebugLog(); return; }
   if (lpFetching) { lpDebug('Already fetching…','warn'); return; }
   lpFetching = true;
-
-  const setBadge = (txt,cls) => {
-    const b=document.getElementById('lp-status-badge');
-    if(b){b.textContent=txt;b.className='lp-badge '+cls;}
-  };
-  setBadge('⏳ Fetching…','lp-badge-ing');
-
-  const symbols = [...new Set(openTrades.map(t => t.stock.replace(/\.(NS|BO|NSE|BSE)$/i,'').toUpperCase()))];
-  lpDebug(`━━ Fetching ${symbols.length} symbol(s): ${symbols.join(', ')} ━━`);
-
-  let ok=0, fail=0;
+  const setB=(txt,cls)=>{const b=document.getElementById('lp-status-badge');if(b){b.textContent=txt;b.className='lp-badge '+cls;}};
+  setB('⏳ Fetching…','lp-badge-ing');
+  const symbols=[...new Set(openTrades.map(t=>t.stock.replace(/\.(NS|BO|NSE|BSE|IN)$/i,'').toUpperCase()))];
+  lpDebug(`━━ Fetching: ${symbols.join(', ')} ━━`);
+  let ok=0,fail=0;
   for (const sym of symbols) {
-    const result = await fetchSymbolPrice(sym);
-    if (result) { livePrices[sym]=result; ok++; }
-    else         { livePrices[sym]={error:true,ts:Date.now()}; fail++; }
+    const r=await fetchSymbolPrice(sym);
+    if(r){livePrices[sym]=r;ok++;}else{livePrices[sym]={error:true,ts:Date.now()};fail++;}
   }
-
-  lpFetching = false;
-  const lastEl = document.getElementById('lp-last-time');
-  if (lastEl) lastEl.textContent = `Last: ${new Date().toLocaleTimeString('en-IN')}`;
-
-  if   (fail===0) setBadge(`✓ ${ok} updated`,  'lp-badge-ok');
-  else if (ok===0) setBadge(`✗ All ${fail} failed`,'lp-badge-err');
-  else             setBadge(`⚠ ${ok}✓ ${fail}✗`, 'lp-badge-warn');
-
-  lpDebug(`━━ Done: ${ok} ok / ${fail} failed ━━`, fail===0?'ok':ok===0?'err':'warn');
-  if (curView==='table') renderTable();
+  lpFetching=false;
+  const le=document.getElementById('lp-last-time'); if(le) le.textContent=`Last: ${new Date().toLocaleTimeString('en-IN')}`;
+  if(fail===0) setB(`✓ ${ok} updated`,'lp-badge-ok');
+  else if(ok===0) setB(`✗ All ${fail} failed`,'lp-badge-err');
+  else setB(`⚠ ${ok}✓ / ${fail}✗`,'lp-badge-warn');
+  lpDebug(`━━ Done: ${ok} ok / ${fail} failed ━━`,fail===0?'ok':ok===0?'err':'warn');
+  if(curView==='table') renderTable();
   renderDash();
 }
 
-setInterval(() => { if (curView==='table'||curView==='dashboard') fetchOpenPrices(); }, 5*60*1000);
+setInterval(()=>{if(curView==='table'||curView==='dashboard')fetchOpenPrices();},5*60*1000);
 
 async function testSingleSymbol() {
-  const inp = document.getElementById('lp-test-sym');
-  const sym = (inp?.value||'').trim().toUpperCase();
-  if (!sym) { toast('⚠ Enter a symbol first'); return; }
+  const inp=document.getElementById('lp-test-sym');
+  const sym=(inp?.value||'').trim().toUpperCase();
+  if(!sym){toast('⚠ Enter a symbol first');return;}
   lpDebug(`━━ Manual test: ${sym} ━━`);
-  const b=document.getElementById('lp-status-badge');
-  if(b){b.textContent='⏳ Testing…';b.className='lp-badge lp-badge-ing';}
-  const result = await fetchSymbolPrice(sym);
-  if (result) {
-    livePrices[sym]=result;
-    if(b){b.textContent=`✓ ₹${result.price}`;b.className='lp-badge lp-badge-ok';}
-    toast(`✓ ${sym}: ₹${result.price} via ${result.proxy}`);
+  const setB=(txt,cls)=>{const b=document.getElementById('lp-status-badge');if(b){b.textContent=txt;b.className='lp-badge '+cls;}};
+  setB('⏳ Testing…','lp-badge-ing');
+  const r=await fetchSymbolPrice(sym);
+  if(r){
+    livePrices[sym]=r;
+    setB(`✓ ₹${r.price}`,'lp-badge-ok');
+    toast(`✓ ${sym}: ₹${r.price} (${r.chg>=0?'+':''}${r.chg}%) via ${r.via}`);
   } else {
-    if(b){b.textContent='✗ All proxies failed';b.className='lp-badge lp-badge-err';}
-    toast(`✗ Could not fetch ${sym}`);
+    setB('✗ All sources failed','lp-badge-err');
+    toast(`✗ ${sym}: all sources failed — see debug log`);
   }
-  if (curView==='table') renderTable();
+  if(curView==='table') renderTable();
 }
 
 /* ═══════════════════════════════════════════════
