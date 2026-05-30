@@ -38,9 +38,47 @@ let curView   = 'dashboard';
 let curFilter = 'all';
 let editId    = null;
 let detId     = null;
+let formGrade = '';
 let formSt    = 'Open';
 let formTp    = 'Real';
+let formGradeInit = false;
 let sbClient  = null;
+let selectMode   = false;
+let selectedIds  = new Set();
+let ddActiveKey  = 'setups';
+let ddEditIndex  = null;
+let csvPendingRows = [];
+let ledgerFilter = 'all';
+let ledgerSearch = '';
+let hiddenCols   = new Set();
+let livePrices   = {};
+let lpFetching   = false;
+
+function setGrade(g, btn) {
+  formGrade = g;
+  document.querySelectorAll('.grade-btn').forEach(b => {
+    b.classList.remove('grade-a','grade-b','grade-c','grade-d','grade-active');
+  });
+  if (btn && g) {
+    btn.classList.add('grade-active', 'grade-'+g.toLowerCase());
+  }
+  const hints = { A:'Perfect execution — followed rules exactly', B:'Good — minor deviation', C:'Average — notable mistakes', D:'Poor — broke rules / revenge trade', '':'Not graded' };
+  const hint = document.getElementById('grade-hint');
+  if (hint) hint.textContent = hints[g] || 'A=Perfect · B=Good · C=Average · D=Mistake';
+}
+
+function resetGrade() {
+  formGrade = '';
+  document.querySelectorAll('.grade-btn').forEach(b => b.classList.remove('grade-a','grade-b','grade-c','grade-d','grade-active'));
+  const hint = document.getElementById('grade-hint');
+  if (hint) hint.textContent = 'A=Perfect · B=Good · C=Average · D=Mistake';
+}
+
+function gradeBadgeHTML(g) {
+  if (!g) return '';
+  const map = { A:'grade-a', B:'grade-b', C:'grade-c', D:'grade-d' };
+  return `<span class="grade-badge ${map[g]||''}">${g}</span>`;
+}
 
 /* ═══════════════════════════════════════════════
    MATH HELPERS
@@ -379,11 +417,12 @@ function switchView(v) {
   curView = v;
   document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-item[data-view]').forEach(el => el.classList.remove('active'));
-  document.getElementById('v-'+v).classList.add('active');
+  const viewEl = document.getElementById('v-'+v);
+  if (viewEl) viewEl.classList.add('active');
   document.querySelector(`.nav-item[data-view="${v}"]`)?.classList.add('active');
-  if (v==='dashboard') renderDash();
-  if (v==='trades')    renderTrades();
-  if (v==='table')     renderTable();
+  if (v==='dashboard') { renderDash(); fetchOpenPrices(); }
+  if (v==='table')     { renderTable(); fetchOpenPrices(); }
+  if (v==='analytics') renderAnalytics();
 }
 
 /* ═══════════════════════════════════════════════
@@ -515,6 +554,7 @@ function resetForm() {
   ['f-setup','f-exit','f-mkt'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.selectedIndex=0;
   });
+  resetGrade();
   ['f-slpct','f-allocpct','f-alloc-auto','f-pnlv','f-pnlp','f-portpnl','f-rr','f-days'].forEach(id=>{
     const el=document.getElementById(id);
     if(el){el.value='—';el.className='f-ctrl is-auto';}
@@ -532,12 +572,20 @@ function fillForm(t) {
   set('f-sl',      t.sl);
   set('f-qty-input', t.qty);
   set('f-port',    t.portVal||cfg.portVal||'');
-  set('f-setup',   t.setup);
-  set('f-exit',    t.exitR);
-  set('f-mkt',     t.mktState);
-  set('f-notes',   t.notes);
+  set('f-setup',    t.setup);
+  set('f-exit',     t.exitR);
+  set('f-mkt',      t.mktState);
+  set('f-notes',    t.notes);
   setStatus(t.status||'Open');
   setType(t.type||'Real');
+  // restore grade
+  formGrade = t.grade || '';
+  document.querySelectorAll('.grade-btn').forEach(b => {
+    b.classList.remove('grade-a','grade-b','grade-c','grade-d','grade-active');
+    if (b.dataset.g === formGrade && formGrade) {
+      b.classList.add('grade-active','grade-'+formGrade.toLowerCase());
+    }
+  });
   calc();
 }
 function saveTrade() {
@@ -563,6 +611,7 @@ function saveTrade() {
     exitR:    document.getElementById('f-exit').value,
     mktState: document.getElementById('f-mkt').value,
     notes:    document.getElementById('f-notes').value.trim(),
+    grade:    formGrade,
     status:   formSt,
     type:     formTp,
     ts:  editId?(trades.find(x=>x.id===editId)?.ts||Date.now()):Date.now(),
@@ -630,6 +679,7 @@ function openDetailMo(id) {
   html+=row('Setup',        t.setup||'—');
   html+=row('Exit Reason',  t.exitR||'—');
   html+=row('Market State', t.mktState||'—');
+  html+=row('Exec Grade',   t.grade ? gradeBadgeHTML(t.grade) : '—');
   html+='</div>';
 
   if(t.notes) {
@@ -690,7 +740,6 @@ const DD_META = [
 ];
 
 // Which list is being edited right now
-let ddActiveKey = 'setups';
 
 function renderDropdownEditor() {
   const wrap = document.getElementById('dd-editor');
@@ -748,7 +797,6 @@ function switchDdTab(key) {
   renderDropdownEditor();
 }
 
-let ddEditIndex = null;
 
 function startEditDdItem(i) {
   const meta  = DD_META.find(m => m.key === ddActiveKey);
@@ -989,7 +1037,6 @@ const CSV_COLS = [
 ];
 
 // Pending parsed rows waiting for user to confirm
-let csvPendingRows = [];
 
 /* ── Download blank template ── */
 function downloadCSVTemplate() {
@@ -1306,11 +1353,9 @@ function toast(msg) {
    RENDER — ALL
 ═══════════════════════════════════════════════ */
 function renderAll() {
-  if(curView==='dashboard') renderDash();
-  if(curView==='trades')    renderTrades();
-  if(curView==='table')     renderTable();
-  // always keep dashboard stats fresh
-  if(curView!=='dashboard') renderDash();
+  renderDash();
+  if (curView==='table')     renderTable();
+  if (curView==='analytics') renderAnalytics();
 }
 
 /* ═══════════════════════════════════════════════
@@ -1325,7 +1370,6 @@ function renderDash() {
   document.getElementById('pb-open').textContent   = open.length;
   document.getElementById('pb-closed').textContent = closed.length;
 
-  // Realized P&L
   let totalPnL=0;
   closed.forEach(t=>{const c=fullCalcs(t); if(c.pnlV!==null) totalPnL+=c.pnlV;});
   const totPct = cfg.portVal>0 ? totalPnL/cfg.portVal*100 : null;
@@ -1340,61 +1384,317 @@ function renderDash() {
   pctEl.textContent = totPct!==null ? sgn(totPct)+f2(totPct)+'% realized P&L' : 'No closed trades yet';
   pctEl.className   = 'pb-pct '+pCls(totPct);
 
-  // Win rate
   const wr=closed.length ? wins.length/closed.length*100 : null;
   document.getElementById('s-winrate').textContent = wr!==null ? Math.round(wr)+'%' : '—';
 
-  // Avg R:R (positive trades only for meaningful avg)
   const rrs=closed.map(t=>fullCalcs(t).rr).filter(x=>x!==null);
   const avgRR=rrs.length ? rrs.reduce((a,b)=>a+b,0)/rrs.length : null;
   document.getElementById('s-rr').textContent = avgRR!==null ? f2(avgRR)+'x' : '—';
 
-  // Avg days held
   const dys=closed.map(t=>fullCalcs(t).days).filter(x=>x!==null&&x>=0);
   const avgD=dys.length ? Math.round(dys.reduce((a,b)=>a+b,0)/dys.length) : null;
   document.getElementById('s-days').textContent = avgD!==null ? avgD+'d' : '—';
 
-  // Best / Worst
-  const ranked=closed
-    .map(t=>({t,c:fullCalcs(t)}))
-    .filter(x=>x.c.pnlP!==null)
-    .sort((a,b)=>b.c.pnlP-a.c.pnlP);
-
-  if(ranked.length) {
-    const b=ranked[0], w=ranked[ranked.length-1];
-    document.getElementById('bw-best-stock').textContent = b.t.stock;
-    document.getElementById('bw-best-pct').textContent   = '+'+f2(b.c.pnlP)+'%';
-    document.getElementById('bw-worst-stock').textContent= w.t.stock;
-    document.getElementById('bw-worst-pct').textContent  = f2(w.c.pnlP)+'%';
-  } else {
-    ['bw-best-stock','bw-best-pct','bw-worst-stock','bw-worst-pct']
-      .forEach(id=>{ document.getElementById(id).textContent='—'; });
+  // Streak
+  const streakEl=document.getElementById('s-streak'), streakSubEl=document.getElementById('s-streak-sub');
+  if(streakEl){
+    const sorted=[...closed].filter(t=>fullCalcs(t).pnlV!==null)
+      .sort((a,b)=>new Date(b.sellDate||b.upd)-new Date(a.sellDate||a.upd));
+    let streak=0,streakType=null;
+    for(const t of sorted){
+      const win=fullCalcs(t).pnlV>=0;
+      if(streakType===null){streakType=win;streak=1;}
+      else if(win===streakType)streak++;
+      else break;
+    }
+    if(streak>0&&streakType!==null){
+      streakEl.textContent=streak; streakEl.className='s-val '+(streakType?'val-p':'val-l');
+      if(streakSubEl)streakSubEl.textContent=streakType?'🔥 Win streak':'❄️ Loss streak';
+    } else {
+      streakEl.textContent='—'; streakEl.className='s-val val-n';
+      if(streakSubEl)streakSubEl.textContent='';
+    }
   }
 
-  // Open positions section
-  const oDiv=document.getElementById('dash-open');
-  if(open.length) {
-    oDiv.innerHTML=`<div class="section-hd">OPEN POSITIONS (${open.length})</div>`
-      +open.slice(0,8).map(tradeCardHTML).join('');
-  } else { oDiv.innerHTML=''; }
+  // Expectancy
+  const expectEl=document.getElementById('s-expect');
+  if(expectEl&&closed.length){
+    const winPnls=closed.map(t=>fullCalcs(t).pnlP).filter(x=>x!==null&&x>0);
+    const lossPnls=closed.map(t=>fullCalcs(t).pnlP).filter(x=>x!==null&&x<0);
+    const winR=wins.length/closed.length, lossR=1-winR;
+    const avgWin=winPnls.length?winPnls.reduce((a,b)=>a+b,0)/winPnls.length:0;
+    const avgLoss=lossPnls.length?Math.abs(lossPnls.reduce((a,b)=>a+b,0)/lossPnls.length):0;
+    const exp=(winR*avgWin)-(lossR*avgLoss);
+    expectEl.textContent=(exp>=0?'+':'')+f2(exp)+'%';
+    expectEl.className='s-val '+pCls(exp);
+  } else if(expectEl){expectEl.textContent='—';expectEl.className='s-val val-n';}
 
-  // Recent closed
+  // Best / Worst
+  const ranked=closed.map(t=>({t,c:fullCalcs(t)})).filter(x=>x.c.pnlP!==null)
+    .sort((a,b)=>b.c.pnlP-a.c.pnlP);
+  if(ranked.length){
+    const b=ranked[0],w=ranked[ranked.length-1];
+    document.getElementById('bw-best-stock').textContent=b.t.stock;
+    document.getElementById('bw-best-pct').textContent='+'+f2(b.c.pnlP)+'%';
+    document.getElementById('bw-worst-stock').textContent=w.t.stock;
+    document.getElementById('bw-worst-pct').textContent=f2(w.c.pnlP)+'%';
+  } else {
+    ['bw-best-stock','bw-best-pct','bw-worst-stock','bw-worst-pct'].forEach(id=>{document.getElementById(id).textContent='—';});
+  }
+
+  renderMonthlyChart(closed);
+
+  const oDiv=document.getElementById('dash-open');
+  if(open.length){oDiv.innerHTML=`<div class="section-hd">OPEN POSITIONS (${open.length})</div>`+open.slice(0,8).map(tradeCardHTML).join('');}
+  else{oDiv.innerHTML='';}
+
   const rDiv=document.getElementById('dash-recent');
-  if(closed.length) {
-    rDiv.innerHTML=`<div class="section-hd">RECENT CLOSED</div>`
-      +closed.slice(0,5).map(tradeCardHTML).join('');
-  } else if(!open.length) {
-    rDiv.innerHTML=`<div class="empty">
-      <div class="empty-ico">📊</div>
-      <div class="empty-title">No trades yet</div>
-      <div class="empty-sub">Tap the + button to log your first trade</div>
-    </div>`;
-  } else { rDiv.innerHTML=''; }
+  if(closed.length){rDiv.innerHTML=`<div class="section-hd">RECENT CLOSED</div>`+closed.slice(0,5).map(tradeCardHTML).join('');}
+  else if(!open.length){rDiv.innerHTML=`<div class="empty"><div class="empty-ico">📊</div><div class="empty-title">No trades yet</div><div class="empty-sub">Tap the + button to log your first trade</div></div>`;}
+  else{rDiv.innerHTML='';}
 }
 
 /* ═══════════════════════════════════════════════
    TRADE CARD HTML
 ═══════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════
+   MONTHLY P&L CHART (pure SVG)
+═══════════════════════════════════════════════ */
+function renderMonthlyChart(closed) {
+  const el = document.getElementById('monthly-chart');
+  if (!el) return;
+  const byMonth = {};
+  closed.forEach(t => {
+    const d = t.sellDate||t.buyDate; if(!d) return;
+    const key = d.slice(0,7);
+    const c = fullCalcs(t); if(c.pnlV===null) return;
+    byMonth[key] = (byMonth[key]||0) + c.pnlV;
+  });
+  const keys = Object.keys(byMonth).sort();
+  if(!keys.length){el.innerHTML='<div class="chart-empty">No closed trades to chart yet</div>';return;}
+  const vals  = keys.map(k=>byMonth[k]);
+  const maxV  = Math.max(...vals.map(Math.abs),1);
+  const W=el.offsetWidth||340, H=130, pad=12;
+  const slotW=(W-pad*2)/keys.length;
+  const barW=Math.max(8,Math.min(36,slotW-6));
+  const midY=H*0.52;
+  const months=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let bars='',labels='';
+  keys.forEach((k,i)=>{
+    const v=vals[i];
+    const x=pad+i*slotW+(slotW-barW)/2;
+    const h=Math.max(3,Math.abs(v)/maxV*(midY-14));
+    const y=v>=0?midY-h:midY;
+    const col=v>=0?'var(--profit)':'var(--loss)';
+    bars+=`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${h.toFixed(1)}" fill="${col}" rx="2" opacity="0.85"/>`;
+    if(h>20){const ly=v>=0?y-3:y+h+9;bars+=`<text x="${(x+barW/2).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" font-size="8" fill="${col}" font-family="IBM Plex Mono,monospace">${fINR(v,true)}</text>`;}
+    labels+=`<text x="${(x+barW/2).toFixed(1)}" y="${H-2}" text-anchor="middle" font-size="9" fill="var(--text3)" font-family="Rajdhani,sans-serif">${months[+k.slice(5)]||k.slice(5)} ${k.slice(2,4)}</text>`;
+  });
+  el.innerHTML=`<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"><line x1="${pad}" y1="${midY}" x2="${W-pad}" y2="${midY}" stroke="var(--border2)" stroke-width="1"/>${bars}${labels}</svg>`;
+}
+
+/* ═══════════════════════════════════════════════
+   ANALYTICS VIEW
+═══════════════════════════════════════════════ */
+function renderAnalytics() {
+  const closed = trades.filter(t=>t.status==='Closed');
+
+  // Setup win rate
+  const setupEl = document.getElementById('an-setup');
+  if(setupEl){
+    const map={};
+    closed.forEach(t=>{
+      const s=t.setup||'No Setup';
+      if(!map[s])map[s]={wins:0,total:0,pnl:0};
+      map[s].total++;
+      const c=fullCalcs(t);
+      if(c.pnlV!==null){map[s].pnl+=c.pnlV;if(c.pnlV>=0)map[s].wins++;}
+    });
+    const rows=Object.entries(map).sort((a,b)=>b[1].total-a[1].total);
+    if(!rows.length){setupEl.innerHTML='<div class="an-empty">No closed trades yet</div>';}
+    else{
+      setupEl.innerHTML=rows.map(([s,d])=>{
+        const wr=d.total?Math.round(d.wins/d.total*100):0;
+        const col=wr>=60?'var(--profit)':wr>=40?'var(--warn)':'var(--loss)';
+        return `<div class="an-row"><div class="an-row-top"><span class="an-label">${escHtml(s)}</span><span class="an-meta">${d.wins}W/${d.total-d.wins}L &nbsp;·&nbsp;<span class="${pCls(d.pnl)}">${fINR(d.pnl,true)}</span></span></div><div class="an-bar-bg"><div class="an-bar" style="width:${wr}%;background:${col}"></div><span class="an-bar-lbl">${wr}%</span></div></div>`;
+      }).join('');
+    }
+  }
+
+  // Duration buckets
+  const durEl = document.getElementById('an-duration');
+  if(durEl){
+    const buckets=[
+      {label:'Intraday (0-1d)',min:0,max:1},
+      {label:'Short (2-7d)',min:2,max:7},
+      {label:'Medium (8-21d)',min:8,max:21},
+      {label:'Long (22-60d)',min:22,max:60},
+      {label:'Extended (60d+)',min:61,max:Infinity},
+    ];
+    buckets.forEach(b=>{b.trades=[];b.pnl=0;b.wins=0;});
+    closed.forEach(t=>{
+      const c=fullCalcs(t);
+      const d=c.days; if(d===null)return;
+      const bkt=buckets.find(b=>d>=b.min&&d<=b.max);
+      if(!bkt)return;
+      bkt.trades.push(t);
+      if(c.pnlV!==null){bkt.pnl+=c.pnlV;if(c.pnlV>=0)bkt.wins++;}
+    });
+    const active=buckets.filter(b=>b.trades.length>0);
+    if(!active.length){durEl.innerHTML='<div class="an-empty">No closed trades yet</div>';}
+    else{
+      durEl.innerHTML=active.map(b=>{
+        const wr=b.trades.length?Math.round(b.wins/b.trades.length*100):0;
+        const avgPnl=b.trades.length?b.pnl/b.trades.length:0;
+        const col=wr>=60?'var(--profit)':wr>=40?'var(--warn)':'var(--loss)';
+        return `<div class="an-row"><div class="an-row-top"><span class="an-label">${b.label}</span><span class="an-meta">${b.trades.length} trades &nbsp;·&nbsp; Avg <span class="${pCls(avgPnl)}">${fINR(avgPnl,true)}</span></span></div><div class="an-bar-bg"><div class="an-bar" style="width:${wr}%;background:${col}"></div><span class="an-bar-lbl">${wr}% win</span></div></div>`;
+      }).join('');
+    }
+  }
+
+  // Grade breakdown
+  const gradeEl=document.getElementById('an-grade');
+  if(gradeEl){
+    const gm={A:{count:0,wins:0,pnl:0},B:{count:0,wins:0,pnl:0},C:{count:0,wins:0,pnl:0},D:{count:0,wins:0,pnl:0},'?':{count:0,wins:0,pnl:0}};
+    closed.forEach(t=>{
+      const g=t.grade&&['A','B','C','D'].includes(t.grade)?t.grade:'?';
+      const c=fullCalcs(t);
+      gm[g].count++;
+      if(c.pnlV!==null){gm[g].pnl+=c.pnlV;if(c.pnlV>=0)gm[g].wins++;}
+    });
+    const glabels={A:'Perfect',B:'Good',C:'Average',D:'Mistake','?':'Ungraded'};
+    const active=Object.entries(gm).filter(([,d])=>d.count>0);
+    if(!active.length){gradeEl.innerHTML='<div class="an-empty">Grade trades using A/B/C/D when logging</div>';}
+    else{
+      gradeEl.innerHTML=`<div class="grade-grid">${active.map(([g,d])=>{
+        const wr=d.count?Math.round(d.wins/d.count*100):0;
+        const avgPnl=d.count?d.pnl/d.count:0;
+        const gcls=g==='?'?'grade-none':'grade-'+g.toLowerCase();
+        return `<div class="grade-card"><div class="grade-badge-big ${gcls}">${g}</div><div class="grade-card-label">${glabels[g]}</div><div class="grade-card-stat" style="color:var(--text)">${d.count} trades</div><div class="grade-card-stat" style="color:${wr>=60?'var(--profit)':wr>=40?'var(--warn)':'var(--loss)'};">${wr}% win</div><div class="grade-card-stat ${pCls(avgPnl)}">${fINR(avgPnl,true)} avg</div></div>`;
+      }).join('')}</div>`;
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   PDF EXPORT
+═══════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════
+   LIVE PRICE FETCH (Yahoo Finance via CORS proxy)
+═══════════════════════════════════════════════ */
+const CORS_PROXY = 'https://corsproxy.io/?';
+
+async function fetchOpenPrices() {
+  if (!featOn('livePrice')) return;
+  const openTrades = trades.filter(t => t.status === 'Open' && t.stock);
+  if (!openTrades.length) return;
+  if (lpFetching) return;
+  lpFetching = true;
+
+  // Show loading state
+  openTrades.forEach(t => {
+    const el = document.getElementById('lp-'+t.id);
+    if (el) el.innerHTML = '<span class="lp-loading">…</span>';
+  });
+
+  // Deduplicate symbols
+  const symbols = [...new Set(openTrades.map(t => t.stock.toUpperCase()))];
+
+  // Fetch each symbol from Yahoo Finance
+  for (const sym of symbols) {
+    try {
+      const yahooSym = sym + '.NS';   // NSE suffix
+      const url = `${CORS_PROXY}${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1d&range=2d`)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const result = data?.chart?.result?.[0];
+      if (!result) throw new Error('No data');
+      const meta   = result.meta;
+      const price  = meta.regularMarketPrice ?? meta.previousClose;
+      const prev   = meta.chartPreviousClose  ?? meta.previousClose;
+      const chg    = prev ? ((price - prev) / prev * 100) : 0;
+      livePrices[sym] = { price: price.toFixed(2), chg: +chg.toFixed(2), ts: Date.now() };
+    } catch(e) {
+      livePrices[sym] = null;   // mark as failed
+      console.warn(`TradeLog: price fetch failed for ${sym}:`, e.message);
+    }
+  }
+
+  lpFetching = false;
+  // Update table cells if we're on the ledger view
+  if (curView === 'table') renderTable();
+  // Also update dashboard open positions
+  renderDash();
+}
+
+// Auto-refresh prices every 5 minutes when on ledger view
+setInterval(() => {
+  if (curView === 'table') fetchOpenPrices();
+}, 5 * 60 * 1000);
+
+function formatLivePrice(sym) {
+  const lp = livePrices[sym];
+  if (!lp) return null;
+  return {
+    line1: `₹${lp.price}`,
+    line2: `${lp.chg >= 0 ? '+' : ''}${lp.chg}%`,
+    cls:   lp.chg >= 0 ? 'val-p' : 'val-l'
+  };
+}
+
+/* ═══════════════════════════════════════════════
+   PDF EXPORT
+  const closed=trades.filter(t=>t.status==='Closed');
+  const open=trades.filter(t=>t.status==='Open');
+  let totalPnL=0;
+  closed.forEach(t=>{const c=fullCalcs(t);if(c.pnlV!==null)totalPnL+=c.pnlV;});
+  const wins=closed.filter(t=>{const c=fullCalcs(t);return c.pnlV!==null&&c.pnlV>0;});
+  const wr=closed.length?Math.round(wins.length/closed.length*100):0;
+  const rrs=closed.map(t=>fullCalcs(t).rr).filter(x=>x!==null);
+  const avgRR=rrs.length?(rrs.reduce((a,b)=>a+b,0)/rrs.length).toFixed(2):'—';
+  const totPct=cfg.portVal>0?(totalPnL/cfg.portVal*100).toFixed(2):'—';
+  const winPnls=closed.map(t=>fullCalcs(t).pnlP).filter(x=>x!==null&&x>0);
+  const lossPnls=closed.map(t=>fullCalcs(t).pnlP).filter(x=>x!==null&&x<0);
+  const winR=closed.length?wins.length/closed.length:0;
+  const avgWin=winPnls.length?winPnls.reduce((a,b)=>a+b,0)/winPnls.length:0;
+  const avgLoss=lossPnls.length?Math.abs(lossPnls.reduce((a,b)=>a+b,0)/lossPnls.length):0;
+  const exp=((winR*avgWin)-((1-winR)*avgLoss)).toFixed(2);
+  const now=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+  const isDark=(document.documentElement.getAttribute('data-theme')||'dark')==='dark';
+  const bg=isDark?'#060b14':'#f4f7fb',bg2=isDark?'#0a1422':'#fff',textC=isDark?'#e8f4ff':'#06192e',text2=isDark?'#90b8d8':'#1e4a72',accent=isDark?'#00b4ff':'#005faa',profit=isDark?'#00e676':'#007a46',loss=isDark?'#ff4560':'#c0202e',bord=isDark?'#14263e':'#c8d8e8';
+
+  const rowsHTML=[...trades].map((t,i)=>{
+    const c=fullCalcs(t);
+    const sc=t.status==='Open'?accent:(c.pnlV>=0?profit:loss);
+    return `<tr style="border-bottom:1px solid ${bord}"><td>${i+1}</td><td style="font-weight:700">${t.stock}</td><td style="color:${sc}">${t.status}</td><td>${fDate(t.buyDate)}</td><td>\u20B9${t.buyPx||'—'}</td><td>${t.qty||'—'}</td><td>${fDate(t.sellDate)}</td><td>${t.sellPx?'\u20B9'+t.sellPx:'—'}</td><td style="color:${c.pnlV===null?text2:c.pnlV>=0?profit:loss}">${c.pnlV!==null?fINR(c.pnlV):t.status==='Open'?'Open':'—'}</td><td style="color:${c.pnlP===null?text2:c.pnlP>=0?profit:loss}">${c.pnlP!==null?(sgn(c.pnlP)+f2(c.pnlP)+'%'):'—'}</td><td style="color:${c.rr===null?text2:c.rr>=1?profit:loss}">${c.rr!==null?f2(c.rr)+'x':'—'}</td><td>${t.grade||'—'}</td><td style="font-size:10px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.setup||'—'}</td></tr>`;
+  }).join('');
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>TradeLog Report ${now}</title>
+  <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:${bg};color:${textC};font-size:13px;padding:32px}h1{font-size:28px;font-weight:700;letter-spacing:2px;color:${accent};margin-bottom:4px}.sub{font-size:12px;color:${text2};margin-bottom:24px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px}.sc{background:${bg2};border:1px solid ${bord};border-radius:8px;padding:12px;text-align:center}.sc-lbl{font-size:10px;color:${text2};text-transform:uppercase;letter-spacing:1.5px;margin-bottom:4px}.sc-val{font-size:22px;font-weight:700}h2{font-size:14px;font-weight:700;letter-spacing:2px;color:${text2};text-transform:uppercase;margin-bottom:10px;padding-bottom:5px;border-bottom:1px solid ${bord}}table{width:100%;border-collapse:collapse;font-size:11px}th{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:${text2};padding:7px 8px;text-align:left;background:${bg};border-bottom:2px solid ${bord}}td{padding:7px 8px}@media print{body{padding:16px}}</style></head><body>
+  <h1>TRADELOG</h1><div class="sub">Report: ${now} &nbsp;&bull;&nbsp; Portfolio: ${fBig(cfg.portVal)}</div>
+  <div class="stats">
+    <div class="sc"><div class="sc-lbl">Total Trades</div><div class="sc-val" style="color:${accent}">${trades.length}</div></div>
+    <div class="sc"><div class="sc-lbl">Win Rate</div><div class="sc-val" style="color:${profit}">${wr}%</div></div>
+    <div class="sc"><div class="sc-lbl">Realized P&L</div><div class="sc-val" style="color:${totalPnL>=0?profit:loss}">${fINR(totalPnL,true)}</div></div>
+    <div class="sc"><div class="sc-lbl">Port P&L %</div><div class="sc-val" style="color:${parseFloat(totPct||0)>=0?profit:loss}">${totPct!=='—'?(parseFloat(totPct)>=0?'+':'')+totPct+'%':totPct}</div></div>
+    <div class="sc"><div class="sc-lbl">Avg R:R</div><div class="sc-val" style="color:${accent}">${avgRR}x</div></div>
+    <div class="sc"><div class="sc-lbl">Expectancy</div><div class="sc-val" style="color:${parseFloat(exp)>=0?profit:loss}">${parseFloat(exp)>=0?'+':''}${exp}%</div></div>
+    <div class="sc"><div class="sc-lbl">Open</div><div class="sc-val" style="color:${accent}">${open.length}</div></div>
+    <div class="sc"><div class="sc-lbl">Closed</div><div class="sc-val" style="color:${textC}">${closed.length}</div></div>
+  </div>
+  <h2>All Trades</h2>
+  <table><thead><tr><th>#</th><th>Stock</th><th>Status</th><th>Buy Date</th><th>Buy</th><th>Qty</th><th>Sell Date</th><th>Sell</th><th>P&L</th><th>P&L%</th><th>R:R</th><th>Grade</th><th>Setup</th></tr></thead><tbody>${rowsHTML}</tbody></table>
+  <div style="font-size:10px;color:${text2};text-align:center;padding-top:12px;border-top:1px solid ${bord}">TradeLog NSE Journal &bull; ${now}</div>
+  <script>window.onload=()=>window.print();<\/script></body></html>`;
+
+  const blob=new Blob([html],{type:'text/html;charset=utf-8'});
+  const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob),download:`tradelog_report_${new Date().toISOString().slice(0,10)}.html`});
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('📄 Report downloaded — open in browser, then Print → Save as PDF');
+}
+
 /* ─── TradingView link helper ─── */
 function tvURL(stock) {
   // Strip common suffixes users might type, then prefix NSE:
@@ -1417,7 +1717,14 @@ function tradeCardHTML(t) {
   else if (c.pnlV!==null && c.pnlV<0)    cls += ' tc-loss';
 
   const pnlStr = t.status==='Open'
-    ? `<span style="color:var(--open-c);font-size:12px;font-family:var(--ff-m)">OPEN · ${c.days!==null?c.days+'d':''}</span>`
+    ? (() => {
+        const lp = livePrices[t.stock];
+        if (lp && featOn('livePrice')) {
+          const chgCls = lp.chg >= 0 ? 'val-p' : 'val-l';
+          return `<span style="font-family:var(--ff-m);font-size:13px">₹${lp.price} <span class="${chgCls}">${lp.chg>=0?'+':''}${lp.chg}%</span></span>`;
+        }
+        return `<span style="color:var(--open-c);font-size:12px;font-family:var(--ff-m)">OPEN · ${c.days!==null?c.days+'d':''}</span>`;
+      })()
     : (c.pnlV!==null
         ? `<span class="${pCls(c.pnlV)}" style="font-family:var(--ff-m);font-size:14px">${fINR(c.pnlV,true)} &nbsp;${sgn(c.pnlP)}${f2(c.pnlP)}%</span>`
         : '—');
@@ -1450,7 +1757,10 @@ function tradeCardHTML(t) {
     </div>
     <div class="tc-bottom">
       <span class="tc-setup">${t.setup||t.mktState||'—'}</span>
-      <span class="tc-pnl">${pnlStr}</span>
+      <span style="display:flex;align-items:center;gap:6px">
+        ${t.grade ? gradeBadgeHTML(t.grade) : ''}
+        <span class="tc-pnl">${pnlStr}</span>
+      </span>
     </div>
   </div>`;
 }
@@ -1458,71 +1768,60 @@ function tradeCardHTML(t) {
 /* ═══════════════════════════════════════════════
    RENDER — TRADES LIST
 ═══════════════════════════════════════════════ */
-function renderTrades() {
-  const f=curFilter;
-  let list=[...trades];
-  if(f==='open')    list=list.filter(t=>t.status==='Open');
-  if(f==='closed')  list=list.filter(t=>t.status==='Closed');
-  if(f==='profit')  list=list.filter(t=>{const c=fullCalcs(t);return c.pnlV!==null&&c.pnlV>=0;});
-  if(f==='loss')    list=list.filter(t=>{const c=fullCalcs(t);return c.pnlV!==null&&c.pnlV<0;});
-  if(f==='real')    list=list.filter(t=>t.type==='Real');
-  if(f==='virtual') list=list.filter(t=>t.type==='Virtual');
-
-  const el=document.getElementById('trades-list');
-  if(!list.length) {
-    el.innerHTML=`<div class="empty">
-      <div class="empty-ico">🔍</div>
-      <div class="empty-title">No trades found</div>
-      <div class="empty-sub">Try a different filter or add a trade</div>
-    </div>`;
-    return;
-  }
-  el.innerHTML=list.map(tradeCardHTML).join('');
-}
 
 /* ═══════════════════════════════════════════════
    RENDER — TABLE
 ═══════════════════════════════════════════════ */
 function renderTable() {
   renderTableHead();
-  const tbody=document.getElementById('tbl-body');
-  if(!trades.length) {
+  const list    = filteredTrades();
+  const tbody   = document.getElementById('tbl-body');
+  const countEl = document.getElementById('ledger-count-hd');
+  if (countEl) {
+    const shown = list.length, total = trades.length;
+    countEl.textContent = shown < total ? `LEDGER — ${shown} of ${total} trades` : `TRADE LEDGER — ${total} trade${total===1?'':'s'}`;
+  }
+  if (!list.length) {
     const colspan = visibleCols().length;
-    tbody.innerHTML=`<tr><td colspan="${colspan}" style="text-align:center;color:var(--text3);padding:30px">No trades yet</td></tr>`;
+    tbody.innerHTML=`<tr><td colspan="${colspan}" style="text-align:center;color:var(--text3);padding:30px">${ledgerSearch?'No trades match your search':'No trades yet'}</td></tr>`;
     return;
   }
   const cols = visibleCols();
-  tbody.innerHTML=trades.map((t,i)=>{
-    const c=fullCalcs(t);
-    const get = (lbl) => {
+  tbody.innerHTML = list.map((t,i) => {
+    const c  = fullCalcs(t);
+    const lp = livePrices[t.stock];
+    const get = lbl => {
       switch(lbl) {
-        case '#':          return `<td class="td-num" style="text-align:left;position:sticky;left:0;background:var(--bg2);z-index:1">${i+1}</td>`;
-        case 'Stock':      return `<td class="td-stock" style="text-align:left;position:sticky;left:38px;background:var(--bg2);z-index:1">
-          ${t.stock}
-          <a href="${tvURL(t.stock)}" target="_blank" rel="noopener" class="tv-tbl-link" onclick="event.stopPropagation()" title="Open on TradingView">↗</a>
-        </td>`;
-        case 'Status':     return `<td><span class="badge b-${t.status.toLowerCase()}">${t.status}</span></td>`;
-        case 'Type':       return `<td><span class="badge b-${t.type.toLowerCase()}">${t.type==='Virtual'?'VIRT':'REAL'}</span></td>`;
-        case 'Buy Date':   return `<td>${fDate(t.buyDate)}</td>`;
-        case 'Buy ₹':      return `<td>${t.buyPx?'₹'+t.buyPx:'—'}</td>`;
-        case 'EM Prev':    return `<td>${t.emPrev?'₹'+t.emPrev:'—'}</td>`;
-        case 'EM Day':     return `<td>${t.emDay?'₹'+t.emDay:'—'}</td>`;
-        case 'Sell Date':  return `<td>${fDate(t.sellDate)}</td>`;
-        case 'Sell ₹':     return `<td>${t.sellPx?'₹'+t.sellPx:'—'}</td>`;
-        case 'SL ₹':       return `<td>${t.sl?'₹'+t.sl:'—'}</td>`;
-        case 'SL %':       return `<td class="${pCls(c.sl!==null?-c.sl:null)}">${c.sl!==null?f2(c.sl)+'%':'—'}</td>`;
-        case 'Alloc ₹':    return `<td>${c.al?fINR(c.al,true):'—'}</td>`;
-        case 'Alloc %':    return `<td>${c.ap!==null?f2(c.ap)+'%':'—'}</td>`;
-        case 'Qty':        return `<td>${c.q!==null?c.q:'—'}</td>`;
-        case 'P&L ₹':      return `<td class="${pCls(c.pnlV)}">${c.pnlV!==null?fINR(c.pnlV,true):'—'}</td>`;
-        case 'P&L %':      return `<td class="${pCls(c.pnlP)}">${c.pnlP!==null?sgn(c.pnlP)+f2(c.pnlP)+'%':'—'}</td>`;
-        case 'Port P&L%':  return `<td class="${pCls(c.portPnl)}">${c.portPnl!==null?sgn(c.portPnl)+f2(c.portPnl)+'%':'—'}</td>`;
-        case 'R:R':        return `<td class="${pCls(c.rr)}">${c.rr!==null?f2(c.rr)+'x':'—'}</td>`;
-        case 'Days':       return `<td>${c.days!==null?c.days+'d':'—'}</td>`;
-        case 'Setup':      return `<td>${t.setup||'—'}</td>`;
-        case 'Exit':       return `<td>${t.exitR||'—'}</td>`;
-        case 'Mkt State':  return `<td>${t.mktState||'—'}</td>`;
-        default:           return `<td>—</td>`;
+        case '#':         return `<td class="td-num" style="text-align:left;position:sticky;left:0;background:var(--bg2);z-index:1">${i+1}</td>`;
+        case 'Stock':     return `<td class="td-stock" style="text-align:left;position:sticky;left:38px;background:var(--bg2);z-index:1">${t.stock}<a href="${tvURL(t.stock)}" target="_blank" rel="noopener" class="tv-tbl-link" onclick="event.stopPropagation()">↗</a></td>`;
+        case 'Status':    return `<td><span class="badge b-${t.status.toLowerCase()}">${t.status}</span></td>`;
+        case 'Type':      return `<td><span class="badge b-${t.type.toLowerCase()}">${t.type==='Virtual'?'VIRT':'REAL'}</span></td>`;
+        case 'Live ₹':  {
+          if (!lp) return `<td class="lp-cell" id="lp-${t.id}">${t.status==='Open'?'<span class="lp-loading">…</span>':'—'}</td>`;
+          const chgCls = lp.chg>=0?'val-p':'val-l';
+          return `<td class="lp-cell ${chgCls}">₹${lp.price} <span class="lp-chg">${lp.chg>=0?'+':''}${f2(lp.chg)}%</span></td>`;
+        }
+        case 'Buy Date':  return `<td>${fDate(t.buyDate)}</td>`;
+        case 'Buy ₹': return `<td>${t.buyPx?'₹'+t.buyPx:'—'}</td>`;
+        case 'EM Prev':   return `<td>${t.emPrev?'₹'+t.emPrev:'—'}</td>`;
+        case 'EM Day':    return `<td>${t.emDay?'₹'+t.emDay:'—'}</td>`;
+        case 'Sell Date': return `<td>${fDate(t.sellDate)}</td>`;
+        case 'Sell ₹':return `<td>${t.sellPx?'₹'+t.sellPx:'—'}</td>`;
+        case 'SL ₹': return `<td>${t.sl?'₹'+t.sl:'—'}</td>`;
+        case 'SL %':      return `<td class="${pCls(c.sl!==null?-c.sl:null)}">${c.sl!==null?f2(c.sl)+'%':'—'}</td>`;
+        case 'Alloc ₹':return `<td>${c.al?fINR(c.al,true):'—'}</td>`;
+        case 'Alloc %':   return `<td>${c.ap!==null?f2(c.ap)+'%':'—'}</td>`;
+        case 'Qty':       return `<td>${c.q!==null?c.q:'—'}</td>`;
+        case 'P&L ₹':return `<td class="${pCls(c.pnlV)}">${c.pnlV!==null?fINR(c.pnlV,true):'—'}</td>`;
+        case 'P&L %':     return `<td class="${pCls(c.pnlP)}">${c.pnlP!==null?sgn(c.pnlP)+f2(c.pnlP)+'%':'—'}</td>`;
+        case 'Port P&L%': return `<td class="${pCls(c.portPnl)}">${c.portPnl!==null?sgn(c.portPnl)+f2(c.portPnl)+'%':'—'}</td>`;
+        case 'R:R':       return `<td class="${pCls(c.rr)}">${c.rr!==null?f2(c.rr)+'x':'—'}</td>`;
+        case 'Days':      return `<td>${c.days!==null?c.days+'d':'—'}</td>`;
+        case 'Grade':     return `<td>${t.grade?gradeBadgeHTML(t.grade):'—'}</td>`;
+        case 'Setup':     return `<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.setup||'—'}</td>`;
+        case 'Exit':      return `<td>${t.exitR||'—'}</td>`;
+        case 'Mkt State': return `<td>${t.mktState||'—'}</td>`;
+        default:          return `<td>—</td>`;
       }
     };
     return `<tr onclick="openDetailMo('${t.id}')">${cols.map(c=>get(c.lbl)).join('')}</tr>`;
@@ -1546,6 +1845,8 @@ const FEATURES = [
   { id:'exitR',     label:'Exit Reason',             desc:'Why you closed the trade',                icon:'🚪',  group:'Analysis', def:true  },
   { id:'mktState',  label:'Market State',            desc:'Overall market condition at trade time',  icon:'🌡️',  group:'Analysis', def:true  },
   { id:'notes',     label:'Notes / Journal',         desc:'Free-text observations and lessons',      icon:'📝',  group:'Analysis', def:true  },
+  { id:'grade',     label:'Execution Grade',          desc:'Rate your trade discipline (A/B/C/D)',    icon:'🎯',  group:'Analysis', def:true  },
+  { id:'livePrice', label:'Live Price Column',         desc:'Current price for open trades in Ledger', icon:'📡',  group:'Analysis', def:true  },
 ];
 
 // Active features stored in cfg
@@ -1640,6 +1941,7 @@ const TABLE_COLS = [
   { lbl:'Stock',      always:true  },
   { lbl:'Status',     always:true  },
   { lbl:'Type',       feat:'tradeType' },
+  { lbl:'Live ₹',     feat:'livePrice'},
   { lbl:'Buy Date',   always:true  },
   { lbl:'Buy ₹',      always:true  },
   { lbl:'EM Prev',    feat:'ema'   },
@@ -1656,13 +1958,14 @@ const TABLE_COLS = [
   { lbl:'Port P&L%',  feat:'portPnl'},
   { lbl:'R:R',        feat:'rr'    },
   { lbl:'Days',       feat:'days'  },
+  { lbl:'Grade',      feat:'grade' },
   { lbl:'Setup',      feat:'setup' },
   { lbl:'Exit',       feat:'exitR' },
   { lbl:'Mkt State',  feat:'mktState'},
 ];
 
 function visibleCols() {
-  return TABLE_COLS.filter(c => c.always || featOn(c.feat));
+  return TABLE_COLS.filter(c => (c.always || featOn(c.feat)) && !hiddenCols.has(c.lbl));
 }
 
 function renderTableHead() {
@@ -1683,27 +1986,24 @@ function renderTableHead() {
 /* ═══════════════════════════════════════════════
    BULK SELECT / DELETE
 ═══════════════════════════════════════════════ */
-let selectMode  = false;
-let selectedIds = new Set();
 
 function enterSelectMode() {
   selectMode = true;
   selectedIds.clear();
-  // Highlight the Select filter pill
   document.querySelectorAll('.fp').forEach(x => x.classList.remove('active'));
   document.getElementById('fp-select')?.classList.add('active');
-  renderTrades();
+  renderTable();
   updateBulkToolbar();
 }
 
 function exitSelectMode() {
-  selectMode  = false;
+  selectMode   = false;
   selectedIds.clear();
-  curFilter = 'all';
+  ledgerFilter = 'all';
   document.querySelectorAll('.fp').forEach(x => x.classList.remove('active'));
   document.querySelector('.fp[data-f="all"]')?.classList.add('active');
   document.getElementById('fp-select')?.classList.remove('active');
-  renderTrades();
+  renderTable();
   updateBulkToolbar();
 }
 
@@ -1791,8 +2091,72 @@ function deleteFromDetail() {
 }
 
 /* ═══════════════════════════════════════════════
-   FILTER BAR
+   LEDGER FILTER + SEARCH STATE
 ═══════════════════════════════════════════════ */
+
+function applyLedgerFilters() {
+  const inp = document.getElementById('ledger-search');
+  ledgerSearch = inp ? inp.value.trim().toLowerCase() : '';
+  const clr = document.getElementById('search-clear');
+  if (clr) clr.style.display = ledgerSearch ? 'block' : 'none';
+  renderTable();
+}
+
+function clearSearch() {
+  const inp = document.getElementById('ledger-search');
+  if (inp) inp.value = '';
+  ledgerSearch = '';
+  const clr = document.getElementById('search-clear');
+  if (clr) clr.style.display = 'none';
+  renderTable();
+}
+
+function filteredTrades() {
+  let list = [...trades];
+  // Pill filter
+  if (ledgerFilter==='open')    list=list.filter(t=>t.status==='Open');
+  if (ledgerFilter==='closed')  list=list.filter(t=>t.status==='Closed');
+  if (ledgerFilter==='profit')  list=list.filter(t=>{const c=fullCalcs(t);return c.pnlV!==null&&c.pnlV>=0;});
+  if (ledgerFilter==='loss')    list=list.filter(t=>{const c=fullCalcs(t);return c.pnlV!==null&&c.pnlV<0;});
+  if (ledgerFilter==='real')    list=list.filter(t=>t.type==='Real');
+  if (ledgerFilter==='virtual') list=list.filter(t=>t.type==='Virtual');
+  // Search
+  if (ledgerSearch) {
+    list = list.filter(t => {
+      return [t.stock, t.setup, t.exitR, t.mktState, t.notes, t.grade, t.type, t.status]
+        .some(v => v && String(v).toLowerCase().includes(ledgerSearch));
+    });
+  }
+  return list;
+}
+
+/* ─── Column visibility panel ─── */
+function toggleColFilter() {
+  const panel = document.getElementById('col-filter-panel');
+  if (!panel) return;
+  const open = panel.style.display !== 'none';
+  if (open) { panel.style.display='none'; return; }
+  // Build checkboxes for each column
+  panel.innerHTML = TABLE_COLS
+    .filter(c=>!c.always) // always-on cols can't be hidden
+    .map(c => {
+      const on = !hiddenCols.has(c.lbl);
+      return `<label class="col-check">
+        <input type="checkbox" ${on?'checked':''} onchange="toggleCol('${c.lbl}',this.checked)">
+        ${c.lbl}
+      </label>`;
+    }).join('');
+  panel.style.display = 'flex';
+}
+
+function toggleCol(lbl, show) {
+  if (show) hiddenCols.delete(lbl);
+  else hiddenCols.add(lbl);
+  renderTableHead();
+  renderTable();
+}
+
+/* ─── Pill filter bar in Ledger ─── */
 document.querySelectorAll('.fp[data-f]').forEach(el=>{
   el.addEventListener('click', () => {
     if (el.dataset.f === 'select') {
@@ -1803,8 +2167,8 @@ document.querySelectorAll('.fp[data-f]').forEach(el=>{
     if (selectMode) exitSelectMode();
     document.querySelectorAll('.fp').forEach(x => x.classList.remove('active'));
     el.classList.add('active');
-    curFilter = el.dataset.f;
-    renderTrades();
+    ledgerFilter = el.dataset.f;
+    renderTable();
   });
 });
 
