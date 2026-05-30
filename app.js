@@ -721,6 +721,7 @@ function openSettings() {
   renderFeatureList();
   renderDropdownEditor();
   updateBackupStatus();
+  renderDebugLog();
   document.getElementById('mo-settings').classList.add('open');
 }
 function closeSettings() {
@@ -1581,67 +1582,151 @@ function renderAnalytics() {
    PDF EXPORT
 ═══════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════
-   LIVE PRICE FETCH (Yahoo Finance via CORS proxy)
+   LIVE PRICE FETCH — multi-proxy with debug log
 ═══════════════════════════════════════════════ */
-const CORS_PROXY = 'https://corsproxy.io/?';
 
-async function fetchOpenPrices() {
-  if (!featOn('livePrice')) return;
-  const openTrades = trades.filter(t => t.status === 'Open' && t.stock);
-  if (!openTrades.length) return;
-  if (lpFetching) return;
-  lpFetching = true;
+// Multiple CORS proxies tried in order — first success wins
+const CORS_PROXIES = [
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://thingproxy.freeboard.io/fetch/${url}`,
+];
 
-  // Show loading state
-  openTrades.forEach(t => {
-    const el = document.getElementById('lp-'+t.id);
-    if (el) el.innerHTML = '<span class="lp-loading">…</span>';
-  });
+// Debug log — visible in Settings
+const lpLog = [];
+function lpDebug(msg, type='info') {
+  const entry = { ts: new Date().toLocaleTimeString('en-IN'), msg, type };
+  lpLog.unshift(entry);
+  if (lpLog.length > 60) lpLog.pop();
+  // Live-update if debug panel is open
+  const panel = document.getElementById('lp-debug-log');
+  if (panel) renderDebugLog();
+}
 
-  // Deduplicate symbols
-  const symbols = [...new Set(openTrades.map(t => t.stock.toUpperCase()))];
+function renderDebugLog() {
+  const panel = document.getElementById('lp-debug-log');
+  if (!panel) return;
+  if (!lpLog.length) { panel.innerHTML = '<div class="dbg-empty">No activity yet — tap Fetch Now</div>'; return; }
+  panel.innerHTML = lpLog.map(e => {
+    const col = e.type==='ok' ? 'var(--profit)' : e.type==='err' ? 'var(--loss)' : e.type==='warn' ? 'var(--warn)' : 'var(--text2)';
+    return `<div class="dbg-row"><span class="dbg-ts">${e.ts}</span><span class="dbg-msg" style="color:${col}">${escHtml(e.msg)}</span></div>`;
+  }).join('');
+}
 
-  // Fetch each symbol from Yahoo Finance
-  for (const sym of symbols) {
+// Timeout helper that works on all Android WebViews (AbortSignal.timeout not always available)
+function fetchWithTimeout(url, ms=10000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
+async function fetchSymbolPrice(sym) {
+  const yahooSym = sym.replace(/\.(NS|BO|NSE|BSE)$/i, '') + '.NS';
+  const targetURL = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1d&range=2d&events=&corsDomain=finance.yahoo.com`;
+
+  for (let pi = 0; pi < CORS_PROXIES.length; pi++) {
+    const proxyURL = CORS_PROXIES[pi](targetURL);
+    lpDebug(`[${sym}] Proxy ${pi+1}: ${proxyURL.slice(0,60)}…`);
     try {
-      const yahooSym = sym + '.NS';   // NSE suffix
-      const url = `${CORS_PROXY}${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1d&range=2d`)}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const res = await fetchWithTimeout(proxyURL, 9000);
+      lpDebug(`[${sym}] Proxy ${pi+1} → HTTP ${res.status}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+
+      const text = await res.text();
+      lpDebug(`[${sym}] Response length: ${text.length} chars`);
+
+      let data;
+      try { data = JSON.parse(text); }
+      catch(pe) { throw new Error(`JSON parse failed: ${text.slice(0,80)}`); }
+
       const result = data?.chart?.result?.[0];
-      if (!result) throw new Error('No data');
-      const meta   = result.meta;
-      const price  = meta.regularMarketPrice ?? meta.previousClose;
-      const prev   = meta.chartPreviousClose  ?? meta.previousClose;
-      const chg    = prev ? ((price - prev) / prev * 100) : 0;
-      livePrices[sym] = { price: price.toFixed(2), chg: +chg.toFixed(2), ts: Date.now() };
+      if (!result) {
+        const errMsg = data?.chart?.error?.description || 'No result in chart data';
+        throw new Error(errMsg);
+      }
+
+      const meta  = result.meta;
+      const price = meta.regularMarketPrice ?? meta.previousClose;
+      const prev  = meta.chartPreviousClose ?? meta.regularMarketPreviousClose ?? meta.previousClose;
+
+      if (!price) throw new Error('price is null/undefined in meta');
+
+      const chg = prev ? ((price - prev) / prev * 100) : 0;
+      const out = { price: (+price).toFixed(2), chg: +chg.toFixed(2), ts: Date.now(), proxy: pi+1 };
+      lpDebug(`[${sym}] ✓ ₹${out.price} (${out.chg>=0?'+':''}${out.chg}%) via Proxy ${pi+1}`, 'ok');
+      return out;
+
     } catch(e) {
-      livePrices[sym] = null;   // mark as failed
-      console.warn(`TradeLog: price fetch failed for ${sym}:`, e.message);
+      lpDebug(`[${sym}] Proxy ${pi+1} failed: ${e.message}`, pi === CORS_PROXIES.length-1 ? 'err' : 'warn');
+      if (pi < CORS_PROXIES.length - 1) {
+        await new Promise(r => setTimeout(r, 400)); // small delay before next proxy
+      }
     }
+  }
+  return null; // all proxies failed
+}
+
+async function fetchOpenPrices(manual=false) {
+  if (!featOn('livePrice') && !manual) return;
+  const openTrades = trades.filter(t => t.status === 'Open' && t.stock);
+  if (!openTrades.length) {
+    lpDebug('No open trades to fetch prices for', 'warn');
+    renderDebugLog();
+    return;
+  }
+  if (lpFetching) { lpDebug('Fetch already in progress…', 'warn'); return; }
+  lpFetching = true;
+  lpDebug(`━━ Starting fetch for ${openTrades.length} open trade(s) ━━`);
+
+  // Update status badge in debug panel
+  const badge = document.getElementById('lp-status-badge');
+  if (badge) { badge.textContent = '⏳ Fetching…'; badge.className = 'lp-badge lp-badge-ing'; }
+
+  const symbols = [...new Set(openTrades.map(t => t.stock.replace(/\.(NS|BO|NSE|BSE)$/i, '').toUpperCase()))];
+  lpDebug(`Symbols: ${symbols.join(', ')}`);
+
+  let ok=0, fail=0;
+  for (const sym of symbols) {
+    const result = await fetchSymbolPrice(sym);
+    if (result) { livePrices[sym] = result; ok++; }
+    else         { livePrices[sym] = { error: true, ts: Date.now() }; fail++; }
   }
 
   lpFetching = false;
-  // Update table cells if we're on the ledger view
+  lpDebug(`━━ Done — ${ok} ok, ${fail} failed ━━`, fail===0?'ok':ok===0?'err':'warn');
+
+  if (badge) {
+    badge.textContent = fail===0 ? `✓ ${ok} updated` : ok===0 ? `✗ All failed` : `⚠ ${ok} ok / ${fail} failed`;
+    badge.className   = `lp-badge ${fail===0?'lp-badge-ok':ok===0?'lp-badge-err':'lp-badge-warn'}`;
+  }
+  const lastEl = document.getElementById('lp-last-time');
+  if (lastEl) lastEl.textContent = `Last fetch: ${new Date().toLocaleTimeString('en-IN')}`;
+
+  renderDebugLog();
   if (curView === 'table') renderTable();
-  // Also update dashboard open positions
   renderDash();
 }
 
-// Auto-refresh prices every 5 minutes when on ledger view
-setInterval(() => {
-  if (curView === 'table') fetchOpenPrices();
-}, 5 * 60 * 1000);
+// Auto-refresh every 5 min when on ledger
+setInterval(() => { if (curView==='table' || curView==='dashboard') fetchOpenPrices(); }, 5*60*1000);
 
-function formatLivePrice(sym) {
-  const lp = livePrices[sym];
-  if (!lp) return null;
-  return {
-    line1: `₹${lp.price}`,
-    line2: `${lp.chg >= 0 ? '+' : ''}${lp.chg}%`,
-    cls:   lp.chg >= 0 ? 'val-p' : 'val-l'
-  };
+async function testSingleSymbol() {
+  const inp = document.getElementById('lp-test-sym');
+  const sym = (inp?.value||'').trim().toUpperCase();
+  if (!sym) { toast('⚠ Enter a symbol first'); return; }
+  lpDebug(`━━ Manual test: ${sym} ━━`);
+  renderDebugLog();
+  const badge = document.getElementById('lp-status-badge');
+  if (badge) { badge.textContent='⏳ Testing…'; badge.className='lp-badge lp-badge-ing'; }
+  const result = await fetchSymbolPrice(sym);
+  if (result) {
+    livePrices[sym] = result;
+    if (badge) { badge.textContent=`✓ ₹${result.price}`; badge.className='lp-badge lp-badge-ok'; }
+  } else {
+    if (badge) { badge.textContent='✗ Failed'; badge.className='lp-badge lp-badge-err'; }
+  }
+  renderDebugLog();
+  if (curView==='table') renderTable();
 }
 
 /* ═══════════════════════════════════════════════

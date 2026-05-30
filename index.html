@@ -351,6 +351,28 @@
           <button class="btn btn-sec" style="font-size:12px;padding:10px" onclick="pullCloud()">⬇ Pull from Cloud</button>
         </div>
 
+        <!-- LIVE PRICE DEBUG -->
+        <div class="f-div"></div>
+        <div class="fsec">LIVE PRICE DEBUG</div>
+        <div class="lp-debug-box">
+          <div class="lp-debug-hdr">
+            <div>
+              <div style="font-family:var(--ff-d);font-size:13px;font-weight:700;color:var(--text)">📡 NSE Live Price Fetch</div>
+              <div id="lp-last-time" style="font-size:11px;color:var(--text3);margin-top:2px">Not fetched yet</div>
+            </div>
+            <span id="lp-status-badge" class="lp-badge">—</span>
+          </div>
+          <div style="display:flex;gap:8px;margin:10px 0 8px">
+            <button class="btn btn-primary" style="font-size:12px;padding:9px;flex:1" onclick="fetchOpenPrices(true).then(renderDebugLog)">▶ Fetch Open Trades</button>
+            <button class="btn btn-sec"     style="font-size:12px;padding:9px;flex:0;white-space:nowrap" onclick="lpLog.length=0;livePrices={};renderDebugLog();toast('Log cleared')">✕ Clear</button>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <input id="lp-test-sym" class="f-ctrl" type="text" placeholder="Test any symbol e.g. RELIANCE" style="flex:1;padding:8px 10px;font-size:12px" oninput="this.value=this.value.toUpperCase()">
+            <button class="btn btn-sec" style="font-size:12px;padding:9px;flex:0;white-space:nowrap" onclick="testSingleSymbol()">Test</button>
+          </div>
+          <div id="lp-debug-log" class="lp-debug-log"><div class="dbg-empty">Tap Fetch or test a symbol to see debug output</div></div>
+        </div>
+
         <!-- DATA -->
         <div class="f-div"></div>
         <div class="fsec">DATA</div>
