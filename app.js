@@ -1475,106 +1475,122 @@ function renderRiskPanel(open) {
     return;
   }
   if (!open.length) {
-    el.innerHTML = `<div class="rp-note">No open trades — risk panel will appear here when you have open positions</div>`;
+    el.innerHTML = `<div class="rp-note">No open trades</div>`;
     return;
   }
 
-  // ── Portfolio invested ──
-  // Alloc ₹ per open trade = buyPx × qty
-  let totalInvested = 0;
-  open.forEach(t => {
-    const c = fullCalcs(t);
-    if (c.al) totalInvested += c.al;
-  });
-  const investedPct = pv > 0 ? totalInvested / pv * 100 : null;
-
-  // ── Open risk ──
-  // Risk per trade = (buyPx - sl) × qty  →  as % of portfolio
-  // If no SL set, we treat risk as full allocation for that trade
-  let totalRisk = 0;
-  const tradeRisks = open.map(t => {
+  // ── Per-trade calculations ──
+  const rows = open.map(t => {
     const c   = fullCalcs(t);
-    const qty = c.q;
-    let riskVal = null;
+    const qty = c.q || (t.qty ? +t.qty : null);
+
+    // Invested = buyPx × qty
+    const invested = (t.buyPx && qty) ? t.buyPx * qty : (c.al || null);
+
+    // Max loss if SL hit = (buyPx - SL) × qty
+    let slRisk = null;
+    let slRiskPct = null;
     if (t.sl && t.buyPx && qty) {
-      riskVal = (t.buyPx - t.sl) * qty;
-      if (riskVal < 0) riskVal = 0; // SL above buy = protective, 0 open risk
-    } else if (c.al) {
-      riskVal = c.al; // no SL = full position at risk
+      slRisk = (t.buyPx - t.sl) * qty;
+      if (slRisk < 0) slRisk = 0;   // SL above buy price = no downside risk
+      slRiskPct = pv > 0 ? slRisk / pv * 100 : null;
     }
-    const riskPct = (riskVal !== null && pv > 0) ? riskVal / pv * 100 : null;
-    totalRisk += riskVal || 0;
-    return { t, c, riskVal, riskPct };
-  }).sort((a, b) => (b.riskPct||0) - (a.riskPct||0));
 
-  const totalRiskPct = pv > 0 ? totalRisk / pv * 100 : null;
+    const investedPct = (invested && pv > 0) ? invested / pv * 100 : null;
+    const lp = livePrices[t.stock];
+    const cmp = lp && !lp.error ? +lp.price : null;
+    const unreal = (cmp && qty && t.buyPx) ? (cmp - t.buyPx) * qty : null;
+    const unrealPct = (unreal !== null && invested) ? unreal / invested * 100 : null;
 
-  // ── Risk colour thresholds ──
-  const riskColor = pct => {
-    if (pct === null) return 'var(--text3)';
-    if (pct > 5)  return 'var(--loss)';
-    if (pct > 2)  return 'var(--warn)';
-    return 'var(--profit)';
-  };
-  const investedColor = pct => {
-    if (pct === null) return 'var(--text3)';
-    if (pct > 90) return 'var(--loss)';
-    if (pct > 70) return 'var(--warn)';
-    return 'var(--accent)';
-  };
+    return { t, c, qty, invested, investedPct, slRisk, slRiskPct, cmp, unreal, unrealPct };
+  }).sort((a, b) => (b.slRiskPct||0) - (a.slRiskPct||0));
 
-  // ── Summary cards ──
-  let html = `<div class="rp-summary">
-    <div class="rp-card">
-      <div class="rp-lbl">Invested</div>
-      <div class="rp-val" style="color:${investedColor(investedPct)}">${investedPct!==null ? f2(investedPct)+'%' : '—'}</div>
-      <div class="rp-sub">${fINR(totalInvested,true)} of ${fBig(pv)}</div>
+  // ── Totals ──
+  const totalInvested  = rows.reduce((s,r) => s + (r.invested||0), 0);
+  const totalSLRisk    = rows.reduce((s,r) => s + (r.slRisk||0), 0);
+  const totalInvPct    = pv > 0 ? totalInvested / pv * 100 : null;
+  const totalSLRiskPct = pv > 0 ? totalSLRisk   / pv * 100 : null;
+  const cashFree       = Math.max(0, pv - totalInvested);
+  const cashFreePct    = pv > 0 ? cashFree / pv * 100 : null;
+  const hasSL          = rows.some(r => r.slRisk !== null);
+
+  // ── Risk colour ──
+  const rCol = pct => pct===null ? '' : pct>5 ? 'val-l' : pct>2 ? '' : 'val-p';
+  const iCol = pct => pct===null ? '' : pct>85 ? 'val-l' : pct>65 ? '' : 'val-p';
+
+  // ── Summary strip ──
+  let html = `<div class="rp-strip">
+    <div class="rp-strip-item">
+      <div class="rp-strip-lbl">Invested</div>
+      <div class="rp-strip-val ${iCol(totalInvPct)}">${totalInvPct!==null?f2(totalInvPct)+'%':'—'}</div>
+      <div class="rp-strip-sub">${fINR(totalInvested,true)}</div>
     </div>
-    <div class="rp-card">
-      <div class="rp-lbl">Open Risk</div>
-      <div class="rp-val" style="color:${riskColor(totalRiskPct)}">${totalRiskPct!==null ? f2(totalRiskPct)+'%' : '—'}</div>
-      <div class="rp-sub">${fINR(totalRisk,true)} at risk</div>
+    <div class="rp-strip-div"></div>
+    <div class="rp-strip-item">
+      <div class="rp-strip-lbl">Max Loss if All SL Hit</div>
+      <div class="rp-strip-val ${rCol(totalSLRiskPct)}">${totalSLRiskPct!==null?f2(totalSLRiskPct)+'%':'—'}</div>
+      <div class="rp-strip-sub">${fINR(totalSLRisk,true)}</div>
     </div>
-    <div class="rp-card">
-      <div class="rp-lbl">Cash Free</div>
-      <div class="rp-val" style="color:var(--accent)">${investedPct!==null ? f2(Math.max(0,100-investedPct))+'%' : '—'}</div>
-      <div class="rp-sub">${fINR(Math.max(0,pv-totalInvested),true)} available</div>
+    <div class="rp-strip-div"></div>
+    <div class="rp-strip-item">
+      <div class="rp-strip-lbl">Cash Free</div>
+      <div class="rp-strip-val">${cashFreePct!==null?f2(cashFreePct)+'%':'—'}</div>
+      <div class="rp-strip-sub">${fINR(cashFree,true)}</div>
     </div>
   </div>`;
 
-  // ── Per-trade risk bars ──
-  html += `<div class="rp-trades-hd">RISK PER OPEN TRADE</div>`;
-  html += `<div class="rp-trades">`;
-  tradeRisks.forEach(({ t, c, riskVal, riskPct }) => {
-    const barW   = Math.min(100, riskPct !== null ? riskPct / Math.max(totalRiskPct, 0.01) * 100 : 0);
-    const col    = riskColor(riskPct);
-    const noSL   = !t.sl;
-    const liveP  = livePrices[t.stock];
-    const curVal = (liveP && c.q) ? +liveP.price * c.q : null;
-    const unreal = (curVal !== null && c.al) ? curVal - c.al : null;
+  // ── Per-trade table ──
+  const hasCMP = rows.some(r => r.cmp !== null);
+  html += `<div class="rp-tbl-wrap"><table class="rp-tbl">
+    <thead><tr>
+      <th style="text-align:left">Stock</th>
+      <th>Qty</th>
+      <th>Buy ₹</th>
+      <th>SL ₹</th>
+      <th>SL %</th>
+      <th>Invested ₹</th>
+      <th>Invested%</th>
+      <th>Risk ₹</th>
+      <th>Risk %</th>
+      ${hasCMP?'<th>CMP ₹</th><th>Unreal ₹</th><th>Unreal %</th>':''}
+    </tr></thead>
+    <tbody>`;
 
-    html += `<div class="rp-row" onclick="openDetailMo('${t.id}')">
-      <div class="rp-row-top">
-        <span class="rp-stock">${t.stock}</span>
-        <span class="rp-days" style="color:var(--text3)">${c.days!==null?c.days+'d':''}</span>
-        <span class="rp-risk-val" style="color:${col}">
-          ${riskPct!==null ? f2(riskPct)+'%' : '—'}
-          ${noSL ? '<span class="rp-nosl">no SL</span>' : ''}
-        </span>
-      </div>
-      <div class="rp-bar-row">
-        <div class="rp-bar-bg">
-          <div class="rp-bar" style="width:${barW}%;background:${col}"></div>
-        </div>
-        <span class="rp-risk-abs">${riskVal!==null ? fINR(riskVal,true) : '—'}</span>
-      </div>
-      ${unreal!==null ? `<div class="rp-unreal">
-        Unrealised: <span class="${pCls(unreal)}">${fINR(unreal,true)} (${sgn(c.al?(unreal/c.al*100):0)}${f2(c.al?(unreal/c.al*100):0)}%)</span>
-        &nbsp;·&nbsp; CMP ₹${liveP.price}
-      </div>` : ''}
-    </div>`;
+  rows.forEach(r => {
+    const noSL = r.slRisk === null;
+    html += `<tr onclick="openDetailMo('${r.t.id}')">
+      <td style="text-align:left;font-family:var(--ff-d);font-weight:700;font-size:13px">${r.t.stock}</td>
+      <td>${r.qty ?? '—'}</td>
+      <td>${r.t.buyPx ? '₹'+r.t.buyPx : '—'}</td>
+      <td>${r.t.sl   ? '₹'+r.t.sl    : '—'}</td>
+      <td class="val-l">${r.c.sl!==null ? f2(r.c.sl)+'%' : '—'}</td>
+      <td>${r.invested ? fINR(r.invested,true) : '—'}</td>
+      <td class="${iCol(r.investedPct)}">${r.investedPct!==null ? f2(r.investedPct)+'%' : '—'}</td>
+      <td class="val-l">${r.slRisk!==null ? fINR(r.slRisk,true) : noSL?'<span style="font-size:10px;color:var(--warn)">No SL</span>':'—'}</td>
+      <td class="${rCol(r.slRiskPct)}">${r.slRiskPct!==null ? f2(r.slRiskPct)+'%' : noSL?'<span style="font-size:10px;color:var(--warn)">Set SL</span>':'—'}</td>
+      ${hasCMP?`
+      <td>${r.cmp!==null?'₹'+r.cmp:'—'}</td>
+      <td class="${pCls(r.unreal)}">${r.unreal!==null?fINR(r.unreal,true):'—'}</td>
+      <td class="${pCls(r.unrealPct)}">${r.unrealPct!==null?(sgn(r.unrealPct)+f2(r.unrealPct)+'%'):'—'}</td>`:''}
+    </tr>`;
   });
-  html += `</div>`;
+
+  // Totals row
+  html += `<tr class="rp-tbl-total">
+    <td style="text-align:left;font-family:var(--ff-d);font-weight:700">TOTAL</td>
+    <td>—</td><td>—</td><td>—</td><td>—</td>
+    <td>${fINR(totalInvested,true)}</td>
+    <td class="${iCol(totalInvPct)}">${totalInvPct!==null?f2(totalInvPct)+'%':'—'}</td>
+    <td class="val-l">${fINR(totalSLRisk,true)}</td>
+    <td class="${rCol(totalSLRiskPct)} rp-tbl-total-risk">${totalSLRiskPct!==null?f2(totalSLRiskPct)+'%':'—'}</td>
+    ${hasCMP?'<td>—</td><td>—</td><td>—</td>':''}
+  </tr>`;
+
+  html += `</tbody></table></div>`;
+
+  if (!hasSL) {
+    html += `<div class="rp-note" style="margin-top:8px">⚠ No stop losses set — add SL to each open trade to see accurate risk</div>`;
+  }
 
   el.innerHTML = html;
 }
