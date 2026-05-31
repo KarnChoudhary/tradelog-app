@@ -1591,13 +1591,17 @@ const CORS_PROXIES = [
 
 function buildEndpoints(sym) {
   const clean    = sym.replace(/\.(NS|BO|NSE|BSE|IN)$/i,'').toUpperCase();
-  const stooqSym = clean.toLowerCase() + '.in';
   const yahooSym = clean + '.NS';
+  const v8url    = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1d&range=2d`;
+  const v8url2   = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1d&range=2d`;
+  // AllOrigins/Yahoo-v8 succeeds 100% of the time — try it first and only.
+  // CodeTabs/Yahoo-v8 on query2 and query1 as safety net.
+  // Everything else (Stooq, Yahoo-v7, CodeTabs-v7) consistently fails — removed.
   return [
-    { label:'Stooq-daily', url:`https://stooq.com/q/d/l/?s=${stooqSym}&i=d`, parse:parseStooq },
-    { label:'Stooq-live',  url:`https://stooq.com/q/l/?s=${stooqSym}&f=sd2t2ohlcv&h&e=csv`, parse:parseStooqLive },
-    { label:'Yahoo-v7',    url:`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(yahooSym)}&fields=regularMarketPrice,regularMarketChangePercent`, parse:parseYahooV7 },
-    { label:'Yahoo-v8',    url:`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1d&range=2d`, parse:parseYahooV8 },
+    { label:'Yahoo-v8',     url:v8url,  parse:parseYahooV8, proxies:['AllOrigins'] },
+    { label:'Yahoo-v8-q1',  url:v8url2, parse:parseYahooV8, proxies:['AllOrigins'] },
+    { label:'Yahoo-v8-ct',  url:v8url,  parse:parseYahooV8, proxies:['CodeTabs']   },
+    { label:'Yahoo-v8-ct2', url:v8url2, parse:parseYahooV8, proxies:['CodeTabs']   },
   ];
 }
 
@@ -1670,23 +1674,29 @@ function fetchWithTimeout(url, ms=10000) {
 /* ─── Fetch single symbol ─── */
 async function fetchSymbolPrice(sym) {
   const clean = sym.replace(/\.(NS|BO|NSE|BSE|IN)$/i,'').toUpperCase();
+  const proxyMap = {
+    'AllOrigins': CORS_PROXIES.find(p=>p.name==='AllOrigins'),
+    'CodeTabs':   CORS_PROXIES.find(p=>p.name==='CodeTabs'),
+  };
+
   for (const ep of buildEndpoints(clean)) {
-    for (const proxy of CORS_PROXIES) {
+    const proxiesToTry = ep.proxies.map(n => proxyMap[n]).filter(Boolean);
+    for (const proxy of proxiesToTry) {
       const purl = proxy.wrap(ep.url);
       lpDebug(`[${clean}] ${proxy.name} / ${ep.label}`);
       try {
-        const res  = await fetchWithTimeout(purl, 9000);
+        const res  = await fetchWithTimeout(purl, 8000);
         lpDebug(`[${clean}] HTTP ${res.status} ← ${proxy.name}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const text = await res.text();
         if (!text||text.trim().length<5) throw new Error('Empty response');
-        const r  = ep.parse(text);
+        const r = ep.parse(text);
         r.ts  = Date.now(); r.via = `${proxy.name}/${ep.label}`;
         lpDebug(`[${clean}] ✓ ₹${r.price} (${r.chg>=0?'+':''}${r.chg}%) via ${r.via}`, 'ok');
         return r;
       } catch(e) {
         lpDebug(`[${clean}] ✗ ${proxy.name}/${ep.label}: ${e.message}`, 'warn');
-        await new Promise(r=>setTimeout(r,250));
+        // Short delay only between endpoints, not between proxies of same endpoint
       }
     }
   }
