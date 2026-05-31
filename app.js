@@ -1445,6 +1445,9 @@ function renderDash() {
 
   renderMonthlyChart(closed);
 
+  // ── Portfolio Invested % + Open Risk ──
+  renderRiskPanel(open);
+
   const oDiv=document.getElementById('dash-open');
   if(open.length){oDiv.innerHTML=`<div class="section-hd">OPEN POSITIONS (${open.length})</div>`+open.slice(0,8).map(tradeCardHTML).join('');}
   else{oDiv.innerHTML='';}
@@ -1460,8 +1463,122 @@ function renderDash() {
 ═══════════════════════════════════════════════ */
 
 /* ═══════════════════════════════════════════════
-   MONTHLY P&L CHART (pure SVG)
+   PORTFOLIO INVESTED % + OPEN RISK PANEL
 ═══════════════════════════════════════════════ */
+function renderRiskPanel(open) {
+  const el = document.getElementById('risk-panel');
+  if (!el) return;
+  const pv = cfg.portVal || 0;
+
+  if (!pv) {
+    el.innerHTML = `<div class="rp-note">Set your portfolio value in ⚙ Config to see risk metrics</div>`;
+    return;
+  }
+  if (!open.length) {
+    el.innerHTML = `<div class="rp-note">No open trades — risk panel will appear here when you have open positions</div>`;
+    return;
+  }
+
+  // ── Portfolio invested ──
+  // Alloc ₹ per open trade = buyPx × qty
+  let totalInvested = 0;
+  open.forEach(t => {
+    const c = fullCalcs(t);
+    if (c.al) totalInvested += c.al;
+  });
+  const investedPct = pv > 0 ? totalInvested / pv * 100 : null;
+
+  // ── Open risk ──
+  // Risk per trade = (buyPx - sl) × qty  →  as % of portfolio
+  // If no SL set, we treat risk as full allocation for that trade
+  let totalRisk = 0;
+  const tradeRisks = open.map(t => {
+    const c   = fullCalcs(t);
+    const qty = c.q;
+    let riskVal = null;
+    if (t.sl && t.buyPx && qty) {
+      riskVal = (t.buyPx - t.sl) * qty;
+      if (riskVal < 0) riskVal = 0; // SL above buy = protective, 0 open risk
+    } else if (c.al) {
+      riskVal = c.al; // no SL = full position at risk
+    }
+    const riskPct = (riskVal !== null && pv > 0) ? riskVal / pv * 100 : null;
+    totalRisk += riskVal || 0;
+    return { t, c, riskVal, riskPct };
+  }).sort((a, b) => (b.riskPct||0) - (a.riskPct||0));
+
+  const totalRiskPct = pv > 0 ? totalRisk / pv * 100 : null;
+
+  // ── Risk colour thresholds ──
+  const riskColor = pct => {
+    if (pct === null) return 'var(--text3)';
+    if (pct > 5)  return 'var(--loss)';
+    if (pct > 2)  return 'var(--warn)';
+    return 'var(--profit)';
+  };
+  const investedColor = pct => {
+    if (pct === null) return 'var(--text3)';
+    if (pct > 90) return 'var(--loss)';
+    if (pct > 70) return 'var(--warn)';
+    return 'var(--accent)';
+  };
+
+  // ── Summary cards ──
+  let html = `<div class="rp-summary">
+    <div class="rp-card">
+      <div class="rp-lbl">Invested</div>
+      <div class="rp-val" style="color:${investedColor(investedPct)}">${investedPct!==null ? f2(investedPct)+'%' : '—'}</div>
+      <div class="rp-sub">${fINR(totalInvested,true)} of ${fBig(pv)}</div>
+    </div>
+    <div class="rp-card">
+      <div class="rp-lbl">Open Risk</div>
+      <div class="rp-val" style="color:${riskColor(totalRiskPct)}">${totalRiskPct!==null ? f2(totalRiskPct)+'%' : '—'}</div>
+      <div class="rp-sub">${fINR(totalRisk,true)} at risk</div>
+    </div>
+    <div class="rp-card">
+      <div class="rp-lbl">Cash Free</div>
+      <div class="rp-val" style="color:var(--accent)">${investedPct!==null ? f2(Math.max(0,100-investedPct))+'%' : '—'}</div>
+      <div class="rp-sub">${fINR(Math.max(0,pv-totalInvested),true)} available</div>
+    </div>
+  </div>`;
+
+  // ── Per-trade risk bars ──
+  html += `<div class="rp-trades-hd">RISK PER OPEN TRADE</div>`;
+  html += `<div class="rp-trades">`;
+  tradeRisks.forEach(({ t, c, riskVal, riskPct }) => {
+    const barW   = Math.min(100, riskPct !== null ? riskPct / Math.max(totalRiskPct, 0.01) * 100 : 0);
+    const col    = riskColor(riskPct);
+    const noSL   = !t.sl;
+    const liveP  = livePrices[t.stock];
+    const curVal = (liveP && c.q) ? +liveP.price * c.q : null;
+    const unreal = (curVal !== null && c.al) ? curVal - c.al : null;
+
+    html += `<div class="rp-row" onclick="openDetailMo('${t.id}')">
+      <div class="rp-row-top">
+        <span class="rp-stock">${t.stock}</span>
+        <span class="rp-days" style="color:var(--text3)">${c.days!==null?c.days+'d':''}</span>
+        <span class="rp-risk-val" style="color:${col}">
+          ${riskPct!==null ? f2(riskPct)+'%' : '—'}
+          ${noSL ? '<span class="rp-nosl">no SL</span>' : ''}
+        </span>
+      </div>
+      <div class="rp-bar-row">
+        <div class="rp-bar-bg">
+          <div class="rp-bar" style="width:${barW}%;background:${col}"></div>
+        </div>
+        <span class="rp-risk-abs">${riskVal!==null ? fINR(riskVal,true) : '—'}</span>
+      </div>
+      ${unreal!==null ? `<div class="rp-unreal">
+        Unrealised: <span class="${pCls(unreal)}">${fINR(unreal,true)} (${sgn(c.al?(unreal/c.al*100):0)}${f2(c.al?(unreal/c.al*100):0)}%)</span>
+        &nbsp;·&nbsp; CMP ₹${liveP.price}
+      </div>` : ''}
+    </div>`;
+  });
+  html += `</div>`;
+
+  el.innerHTML = html;
+}
+
 function renderMonthlyChart(closed) {
   const el = document.getElementById('monthly-chart');
   if (!el) return;
