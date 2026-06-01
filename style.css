@@ -715,3 +715,8 @@ select.f-ctrl option{background:var(--bg3)}
 .rp-tbl-total-risk{
   font-family:var(--ff-d) !important;font-size:14px !important;font-weight:700 !important;
 }
+
+/* ═══ LP DASHBOARD INDICATOR */
+.lp-ind-ok  {color:var(--profit);font-family:var(--ff-m);font-size:11px}
+.lp-ind-warn{color:var(--warn);  font-family:var(--ff-m);font-size:11px}
+.lp-ind-ing {color:var(--accent);font-family:var(--ff-m);font-size:11px;animation:lp-pulse 1.2s ease-in-out infinite}
