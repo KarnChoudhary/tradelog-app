@@ -3,6 +3,7 @@
   "short_name": "TradeLog",
   "description": "NSE swing trade journal with auto-calculations, stats dashboard and cloud sync",
   "start_url": "/tradelog-app/index.html"",
+  "scope": "/tradelog-app/"
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#060b14",
