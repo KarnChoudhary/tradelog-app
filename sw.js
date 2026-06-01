@@ -12,7 +12,7 @@ const CACHE_NAME  = 'tradelog-static-v3';
 const FONT_CACHE  = 'tradelog-fonts-v1';
 
 // Files to pre-cache for offline support (static assets only)
-const OFFLINE_SHELL = ['./index.html'];
+const OFFLINE_SHELL = ['./index.html', './app.js', './style.css'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
