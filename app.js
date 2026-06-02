@@ -51,6 +51,8 @@ let csvPendingRows = [];
 let ledgerFilter = 'all';
 let ledgerSearch = '';
 let hiddenCols   = new Set();
+let sortCol      = null;   // column label currently sorted
+let sortDir      = 'asc';  // 'asc' | 'desc'
 let livePrices   = {};
 let lpFetching   = false;
 
@@ -307,14 +309,20 @@ window.tlRestoreFrom = function(key) {
 };
 
 /* ═══════════════════════════════════════════════
-   SUPABASE
+   SUPABASE — auto-sync on load + Realtime
 ═══════════════════════════════════════════════ */
+let sbChannel = null;
+
 function initSB() {
   const pill = document.getElementById('sync-pill');
   if (cfg.sbUrl && cfg.sbKey && window.supabase) {
     try {
       sbClient = window.supabase.createClient(cfg.sbUrl.trim(), cfg.sbKey.trim());
       if (pill) pill.innerHTML = '<span class="sync-pill">☁ SYNC ON</span>';
+      // Auto-pull on every page load so any browser stays in sync
+      autoSyncOnLoad();
+      // Subscribe to Realtime changes so edits on another device appear instantly
+      subscribeRealtime();
       return true;
     } catch(e) {
       sbClient = null;
@@ -326,6 +334,102 @@ function initSB() {
     if (pill) pill.innerHTML = '';
     return false;
   }
+}
+
+async function autoSyncOnLoad() {
+  if (!sbClient) return;
+  try {
+    const { data, error } = await sbClient
+      .from('tradelog').select('*').order('updated_at', { ascending: false });
+    if (error || !data?.length) return;
+
+    const cloud = data.map(r => JSON.parse(r.payload));
+
+    // Merge strategy: cloud wins for any trade that's newer than local copy
+    let changed = false;
+    cloud.forEach(ct => {
+      const li = trades.findIndex(t => t.id === ct.id);
+      if (li === -1) {
+        trades.unshift(ct);
+        changed = true;
+      } else if ((ct.upd || 0) > (trades[li].upd || 0)) {
+        trades[li] = ct;
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      saveTrades();
+      renderAll();
+      const pill = document.getElementById('sync-pill');
+      if (pill) pill.innerHTML = '<span class="sync-pill">☁ SYNCED</span>';
+      setTimeout(() => {
+        if (pill) pill.innerHTML = '<span class="sync-pill">☁ SYNC ON</span>';
+      }, 3000);
+    }
+  } catch(e) {
+    console.warn('TradeLog autoSync:', e.message);
+  }
+}
+
+function subscribeRealtime() {
+  if (!sbClient) return;
+  // Unsubscribe existing channel first
+  if (sbChannel) { sbClient.removeChannel(sbChannel); sbChannel = null; }
+  sbChannel = sbClient
+    .channel('tradelog-changes')
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'tradelog' },
+      payload => {
+        handleRealtimeChange(payload);
+      }
+    )
+    .subscribe(status => {
+      const pill = document.getElementById('sync-pill');
+      if (status === 'SUBSCRIBED') {
+        if (pill) pill.innerHTML = '<span class="sync-pill">☁ LIVE</span>';
+      }
+    });
+}
+
+function handleRealtimeChange(payload) {
+  try {
+    if (payload.eventType === 'DELETE') {
+      const id = payload.old?.id;
+      if (id) { trades = trades.filter(t => t.id !== id); saveTrades(); renderAll(); }
+      return;
+    }
+    const row = payload.new;
+    if (!row?.payload) return;
+    const ct = JSON.parse(row.payload);
+    const li = trades.findIndex(t => t.id === ct.id);
+    if (li === -1) trades.unshift(ct);
+    else trades[li] = ct;
+    saveTrades(); renderAll();
+    toast('☁ Synced from another device');
+  } catch(e) {
+    console.warn('TradeLog realtime:', e.message);
+  }
+}
+
+// Push a single trade to cloud immediately after save
+async function pushTrade(t) {
+  if (!sbClient) return;
+  try {
+    await sbClient.from('tradelog').upsert(
+      { id: t.id, payload: JSON.stringify(t), updated_at: new Date().toISOString() },
+      { onConflict: 'id' }
+    );
+  } catch(e) {
+    console.warn('TradeLog pushTrade:', e.message);
+  }
+}
+
+// Delete a trade from cloud
+async function deleteTradeCloud(id) {
+  if (!sbClient) return;
+  try { await sbClient.from('tradelog').delete().eq('id', id); }
+  catch(e) { console.warn('TradeLog deleteCloud:', e.message); }
 }
 
 function setConnStatus(type, msg) {
@@ -625,6 +729,7 @@ function saveTrade() {
     trades.unshift(t);
   }
   saveTrades(); closeTradeMo(); renderAll();
+  pushTrade(t);   // auto-sync to cloud
   toast(editId ? '✓ Trade updated' : '✓ Trade saved');
 }
 function uid() { return 'tl_'+Date.now()+'_'+Math.random().toString(36).slice(2,8); }
@@ -745,51 +850,67 @@ const DD_META = [
 function renderDropdownEditor() {
   const wrap = document.getElementById('dd-editor');
   if (!wrap) return;
-  // NOTE: do NOT mutate cfg.dropdowns here — getters use ?? fallback to defaults
-
-  // ── Tab bar
-  let tabHtml = '<div class="dd-tabs">';
-  DD_META.forEach(m => {
-    const active = ddActiveKey === m.key ? ' dd-tab-active' : '';
-    tabHtml += `<div class="dd-tab${active}" onclick="switchDdTab('${m.key}')">${m.icon} ${m.label}</div>`;
-  });
-  tabHtml += '</div>';
-
-  // ── Active list
   const meta  = DD_META.find(m => m.key === ddActiveKey);
   const items = meta.getter();
 
-  let listHtml = '<div class="dd-list" id="dd-list">';
-  items.forEach((item, i) => {
-    listHtml += `
-      <div class="dd-item" id="ddi-${i}">
-        <div class="dd-drag">⠿</div>
-        <div class="dd-item-text">${escHtml(item)}</div>
-        <div class="dd-item-actions">
-          <button class="dd-btn dd-edit-btn" onclick="startEditDdItem(${i})" title="Edit">✏️</button>
-          <button class="dd-btn dd-del-btn"  onclick="deleteDdItem(${i})"    title="Remove">✕</button>
-        </div>
-      </div>`;
+  let html = '<div class="dd-tabs">';
+  DD_META.forEach(m => {
+    const active = ddActiveKey === m.key ? ' dd-tab-active' : '';
+    html += `<div class="dd-tab${active}" onclick="switchDdTab('${m.key}')">${m.icon} ${m.label}</div>`;
   });
-  listHtml += '</div>';
-
-  // ── Add new input
-  const addHtml = `
-    <div class="dd-add-row">
-      <input id="dd-new-input" class="f-ctrl" type="text"
-             placeholder="Type new option and press Add…"
-             onkeydown="if(event.key==='Enter') addDdItem()">
-      <button class="btn btn-primary dd-add-btn" onclick="addDdItem()">Add</button>
+  html += '</div>';
+  html += `<div style="font-size:10px;color:var(--text3);margin-bottom:6px;font-family:var(--ff-d);letter-spacing:.8px">⠿ Drag to reorder &nbsp;·&nbsp; ✏️ Edit &nbsp;·&nbsp; ✕ Remove</div>`;
+  html += '<div class="dd-list" id="dd-list">';
+  items.forEach((item, i) => {
+    html += `<div class="dd-item" id="ddi-${i}" draggable="true"
+      ondragstart="ddDragStart(${i})"
+      ondragover="ddDragOver(event,${i})"
+      ondrop="ddDrop(event,${i})"
+      ondragend="ddDragEnd()">
+      <div class="dd-drag" title="Drag to reorder">⠿</div>
+      <div class="dd-item-text">${escHtml(item)}</div>
+      <div class="dd-item-actions">
+        <button class="dd-btn dd-edit-btn" onclick="startEditDdItem(${i})" title="Edit">✏️</button>
+        <button class="dd-btn dd-del-btn"  onclick="deleteDdItem(${i})"    title="Remove">✕</button>
+      </div>
     </div>`;
-
-  // ── Footer buttons
-  const footHtml = `
-    <div class="dd-footer">
-      <button class="feat-reset-btn" onclick="resetDdList('${ddActiveKey}')">↺ Reset to defaults</button>
-    </div>`;
-
-  wrap.innerHTML = tabHtml + listHtml + addHtml + footHtml;
+  });
+  html += '</div>';
+  html += `<div class="dd-add-row">
+    <input id="dd-new-input" class="f-ctrl" type="text" placeholder="Type new option and press Add…" onkeydown="if(event.key==='Enter') addDdItem()">
+    <button class="btn btn-primary dd-add-btn" onclick="addDdItem()">Add</button>
+  </div>`;
+  html += `<button class="feat-reset-btn" onclick="resetDdList('${ddActiveKey}')">↺ Reset to defaults</button>`;
+  wrap.innerHTML = html;
 }
+
+let ddDragIdx = null;
+function ddDragStart(i) {
+  ddDragIdx = i;
+  setTimeout(() => { const el=document.getElementById('ddi-'+i); if(el) el.style.opacity='0.4'; }, 0);
+}
+function ddDragOver(e, i) {
+  e.preventDefault(); e.dataTransfer.dropEffect='move';
+  document.querySelectorAll('.dd-item').forEach(el=>el.classList.remove('dd-drag-over'));
+  const el=document.getElementById('ddi-'+i);
+  if(el && i!==ddDragIdx) el.classList.add('dd-drag-over');
+}
+function ddDrop(e, targetIdx) {
+  e.preventDefault();
+  if(ddDragIdx===null||ddDragIdx===targetIdx) return;
+  if(!cfg.dropdowns) cfg.dropdowns={};
+  const meta=DD_META.find(m=>m.key===ddActiveKey);
+  const items=[...meta.getter()];
+  const moved=items.splice(ddDragIdx,1)[0];
+  items.splice(targetIdx,0,moved);
+  cfg.dropdowns[ddActiveKey]=items;
+  saveCfg(); rebuildSelects(); renderDropdownEditor();
+}
+function ddDragEnd() {
+  ddDragIdx=null;
+  document.querySelectorAll('.dd-item').forEach(el=>{el.style.opacity='';el.classList.remove('dd-drag-over');});
+}
+
 
 function switchDdTab(key) {
   ddActiveKey = key;
@@ -894,6 +1015,34 @@ function exportJSON() {
   });
   a.click(); URL.revokeObjectURL(a.href);
   toast('Exported '+trades.length+' trades');
+}
+
+function fullBackup() {
+  const backup = {
+    version:   3,
+    exportedAt: new Date().toISOString(),
+    trades,
+    cfg: {
+      portVal:   cfg.portVal,
+      features:  cfg.features,
+      dropdowns: cfg.dropdowns,
+      // deliberately exclude sbUrl/sbKey for security
+    },
+    meta: {
+      tradeCount:  trades.length,
+      openTrades:  trades.filter(t=>t.status==='Open').length,
+      closedTrades:trades.filter(t=>t.status==='Closed').length,
+    }
+  };
+  const json = JSON.stringify(backup, null, 2);
+  const blob = new Blob([json], {type:'application/json'});
+  const dt   = new Date().toISOString().replace('T','_').slice(0,16).replace(':','-');
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: `tradelog_FULL_BACKUP_${dt}.json`
+  });
+  a.click(); URL.revokeObjectURL(a.href);
+  toast(`✓ Full backup downloaded — ${trades.length} trades + all settings`);
 }
 function importJSON(inp) {
   const file=inp.files[0]; if(!file) return;
@@ -2036,7 +2185,7 @@ function tradeCardHTML(t) {
 ═══════════════════════════════════════════════ */
 function renderTable() {
   renderTableHead();
-  const list    = filteredTrades();
+  const list    = sortedTrades(filteredTrades());
   const tbody   = document.getElementById('tbl-body');
   const countEl = document.getElementById('ledger-count-hd');
   if (countEl) {
@@ -2232,17 +2381,81 @@ function visibleCols() {
 
 function renderTableHead() {
   const thead = document.getElementById('tbl-head');
-  if(!thead) return;
+  if (!thead) return;
   const cols = visibleCols();
   const stickyLeft = ['#','Stock'];
-  let th = cols.map((c,i)=>{
-    const isSticky = stickyLeft.includes(c.lbl);
-    const style = isSticky
-      ? `style="text-align:left;position:sticky;left:${i===0?'0':'38px'};z-index:3;background:var(--bg)"`
+  // # col is not sortable (it's just row index)
+  const nonSortable = new Set(['#']);
+  let th = cols.map((c,i) => {
+    const isSticky  = stickyLeft.includes(c.lbl);
+    const noSort    = nonSortable.has(c.lbl);
+    const isSorted  = sortCol === c.lbl;
+    const arrow     = isSorted ? (sortDir==='asc' ? ' ▲' : ' ▼') : '';
+    const cursor    = noSort ? '' : 'cursor:pointer;user-select:none;';
+    const highlight = isSorted ? 'color:var(--accent);' : '';
+    const stickyStyle = isSticky
+      ? `text-align:left;position:sticky;left:${i===0?'0':'38px'};z-index:3;background:var(--bg);`
       : '';
-    return `<th ${style}>${c.lbl}</th>`;
+    const onclick = noSort ? '' : `onclick="sortByCol('${c.lbl.replace(/'/g,"\\'")}')"`;
+    return `<th style="${stickyStyle}${cursor}${highlight}" ${onclick} title="${noSort?'':('Sort by '+c.lbl)}">${c.lbl}${arrow}</th>`;
   }).join('');
   thead.innerHTML = `<tr>${th}</tr>`;
+}
+
+function sortByCol(lbl) {
+  if (sortCol === lbl) {
+    // cycle: asc → desc → none
+    if (sortDir === 'asc') { sortDir = 'desc'; }
+    else { sortCol = null; sortDir = 'asc'; }
+  } else {
+    sortCol = lbl; sortDir = 'asc';
+  }
+  renderTableHead();
+  renderTable();
+}
+
+/* Extract a comparable sort value from a trade for a given column label */
+function sortVal(t, lbl) {
+  const c = fullCalcs(t);
+  switch(lbl) {
+    case 'Stock':      return t.stock || '';
+    case 'Status':     return t.status || '';
+    case 'Type':       return t.type || '';
+    case 'Buy Date':   return t.buyDate || '';
+    case 'Buy ₹':      return t.buyPx || 0;
+    case 'EM Prev':    return t.emPrev || 0;
+    case 'EM Day':     return t.emDay || 0;
+    case 'Sell Date':  return t.sellDate || '';
+    case 'Sell ₹':     return t.sellPx || 0;
+    case 'SL ₹':       return t.sl || 0;
+    case 'SL %':       return c.sl ?? 0;
+    case 'Alloc ₹':    return c.al ?? 0;
+    case 'Alloc %':    return c.ap ?? 0;
+    case 'Qty':        return c.q ?? 0;
+    case 'P&L ₹':      return c.pnlV ?? -Infinity;
+    case 'P&L %':      return c.pnlP ?? -Infinity;
+    case 'Port P&L%':  return c.portPnl ?? -Infinity;
+    case 'R:R':        return c.rr ?? -Infinity;
+    case 'Days':       return c.days ?? -1;
+    case 'Grade':      return ['A','B','C','D'].indexOf(t.grade ?? '') + 1 || 99;
+    case 'Setup':      return t.setup || '';
+    case 'Exit':       return t.exitR || '';
+    case 'Mkt State':  return t.mktState || '';
+    case 'Live ₹':     return livePrices[t.stock]?.price ?? 0;
+    default:           return 0;
+  }
+}
+
+function sortedTrades(list) {
+  if (!sortCol) return list;
+  return [...list].sort((a, b) => {
+    const va = sortVal(a, sortCol);
+    const vb = sortVal(b, sortCol);
+    let cmp = 0;
+    if (typeof va === 'string') cmp = va.localeCompare(vb);
+    else cmp = va - vb;
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
 }
 
 /* ═══════════════════════════════════════════════
@@ -2322,24 +2535,22 @@ function closeConfirm() {
 
 function doDelete() {
   if (window._bulkDeletePending) {
+    const ids = [...selectedIds];
     trades = trades.filter(t => !selectedIds.has(t.id));
-    const n = selectedIds.size;
+    const n = ids.length;
     saveTrades();
-    exitSelectMode();
-    closeConfirm();
-    renderAll();
+    ids.forEach(id => deleteTradeCloud(id));
+    exitSelectMode(); closeConfirm(); renderAll();
     toast(`🗑 Deleted ${n} trade${n===1?'':'s'}`);
     window._bulkDeletePending = false;
     return;
   }
-  // Single delete (from edit modal)
+  // Single delete
   if (!editId) return;
-  trades = trades.filter(t => t.id !== editId);
-  saveTrades();
-  closeConfirm();
-  closeTradeMo();
-  closeDetailMo();
-  renderAll();
+  const delId = editId;
+  trades = trades.filter(t => t.id !== delId);
+  saveTrades(); deleteTradeCloud(delId);
+  closeConfirm(); closeTradeMo(); closeDetailMo(); renderAll();
   toast('Trade deleted');
 }
 

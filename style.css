@@ -720,3 +720,11 @@ select.f-ctrl option{background:var(--bg3)}
 .lp-ind-ok  {color:var(--profit);font-family:var(--ff-m);font-size:11px}
 .lp-ind-warn{color:var(--warn);  font-family:var(--ff-m);font-size:11px}
 .lp-ind-ing {color:var(--accent);font-family:var(--ff-m);font-size:11px;animation:lp-pulse 1.2s ease-in-out infinite}
+
+/* ═══ DRAG REORDER */
+.dd-item[draggable]{cursor:grab}
+.dd-item[draggable]:active{cursor:grabbing}
+.dd-drag-over{
+  border-top:2px solid var(--accent) !important;
+  background:var(--accent-dim) !important;
+}
