@@ -74,7 +74,7 @@
       <div id="lp-dash-indicator" style="margin-bottom:8px;font-size:11px;font-family:var(--ff-m)"></div>
 
       <!-- Monthly P&L chart -->
-      <div class="section-hd" style="margin-top:4px">MONTHLY P&amp;L</div>
+      <div class="section-hd" style="margin-top:4px">MONTHLY P&amp;L <button id="monthly-toggle" onclick="toggleMonthlyMode()" title="Toggle ₹ / % view" style="margin-left:auto;font-size:10px;font-family:var(--ff-d);font-weight:700;letter-spacing:1px;padding:3px 8px;border-radius:4px;border:1px solid var(--border2);background:var(--bg3);color:var(--accent);cursor:pointer">₹</button></div>
       <div id="monthly-chart" class="chart-wrap"></div>
 
       <!-- Portfolio invested + open risk -->
@@ -85,13 +85,18 @@
     </section>
 
     <!-- ANALYTICS -->
-    <section id="v-analytics" class="view">
+    <section id="v-analytics" class="view" style="padding-bottom:calc(var(--nav-h) + 14px)">
+      <div id="an-insights"></div>
       <div class="section-hd">SETUP WIN RATE</div>
       <div id="an-setup"></div>
       <div class="section-hd" style="margin-top:16px">HOLD DURATION ANALYSIS</div>
       <div id="an-duration"></div>
+      <div class="section-hd" style="margin-top:16px">EXIT REASON BREAKDOWN</div>
+      <div id="an-exit"></div>
       <div class="section-hd" style="margin-top:16px">GRADE BREAKDOWN</div>
       <div id="an-grade"></div>
+      <div class="section-hd" style="margin-top:16px">TRADE CALENDAR</div>
+      <div id="an-calendar"></div>
       <div style="margin-top:20px">
         <button class="btn btn-primary" style="width:100%;font-size:14px;padding:14px" onclick="exportPDF()">
           📄 Export PDF Report

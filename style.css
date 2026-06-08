@@ -728,3 +728,58 @@ select.f-ctrl option{background:var(--bg3)}
   border-top:2px solid var(--accent) !important;
   background:var(--accent-dim) !important;
 }
+
+/* ═══════════════════════════════════════════════
+   FEATURE ADDITIONS — v4
+═══════════════════════════════════════════════ */
+
+/* Feature 2 & 4: Dashboard open table */
+.dash-open-tbl th { font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text2);padding:6px 8px;border-bottom:2px solid var(--border2);white-space:nowrap;background:var(--bg2) }
+.dash-open-tbl td { padding:7px 8px;font-size:12px;font-family:var(--ff-m);white-space:nowrap;border-bottom:1px solid var(--border) }
+.dash-open-tbl tbody tr:hover td { background:var(--bg3);cursor:pointer }
+.dash-open-tbl th:first-child,.dash-open-tbl td:first-child { text-align:left }
+
+/* Feature 4: Risk alert banners */
+.risk-alert-banner {
+  background: rgba(255,69,96,.12);
+  border: 1px solid var(--loss-bdr);
+  border-radius: var(--r-sm);
+  color: var(--loss);
+  font-size: 12px;
+  font-family: var(--ff-b);
+  padding: 10px 14px;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+.risk-alert-sm { font-size: 11px; padding: 7px 12px; margin-top: 5px; }
+
+/* Feature 3: Analytics pie layout */
+.an-pie-row { display:flex;gap:14px;align-items:center;margin-bottom:8px }
+.an-pie-wrap { position:relative;flex-shrink:0 }
+.an-pie-center { position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:10px;font-family:var(--ff-d);color:var(--text3);text-align:center;white-space:nowrap;letter-spacing:.5px }
+.an-legend { flex:1;min-width:0 }
+
+/* Feature 3: Insights panel */
+.insight-list { display:flex;flex-direction:column;gap:8px;margin-bottom:8px }
+.insight-card {
+  display:flex;align-items:flex-start;gap:10px;
+  padding:10px 12px;border-radius:var(--r-sm);
+  font-size:12px;line-height:1.5;font-family:var(--ff-b);
+}
+.insight-card strong { font-weight:600 }
+.insight-card em { font-style:italic;opacity:.8 }
+.insight-ico { font-size:18px;flex-shrink:0;margin-top:1px }
+.insight-success { background:var(--profit-dim);border:1px solid var(--profit-bdr);color:var(--profit) }
+.insight-warn    { background:var(--warn-dim);border:1px solid rgba(255,167,38,.35);color:var(--warn) }
+.insight-info    { background:var(--accent-dim);border:1px solid var(--accent-bdr);color:var(--accent) }
+
+/* Feature 9: Calendar heatmap */
+#an-calendar { padding: 4px 0 }
+.heatmap-legend {
+  display:flex;align-items:center;gap:6px;margin-top:6px;
+  font-size:10px;font-family:var(--ff-d);color:var(--text3);
+}
+
+/* Feature 8: Monthly toggle button hover */
+#monthly-toggle:active { background:var(--accent-dim);border-color:var(--accent) }
+

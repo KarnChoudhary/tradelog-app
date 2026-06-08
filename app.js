@@ -53,6 +53,8 @@ let ledgerSearch = '';
 let hiddenCols   = new Set();
 let sortCol      = null;   // column label currently sorted
 let sortDir      = 'asc';  // 'asc' | 'desc'
+let dashSortCol  = null;   // dashboard open table sort column
+let dashSortDir  = 'asc';
 let livePrices   = {};
 let lpFetching   = false;
 
@@ -1511,6 +1513,104 @@ function renderAll() {
 /* ═══════════════════════════════════════════════
    RENDER — DASHBOARD
 ═══════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════
+   DASHBOARD OPEN POSITIONS TABLE (sortable)
+═══════════════════════════════════════════════ */
+function dashSortByCol(col) {
+  if (dashSortCol === col) {
+    if (dashSortDir === 'asc') { dashSortDir = 'desc'; }
+    else { dashSortCol = null; dashSortDir = 'asc'; }
+  } else { dashSortCol = col; dashSortDir = 'asc'; }
+  const open = trades.filter(t => t.status === 'Open');
+  document.getElementById('dash-open').innerHTML =
+    `<div class="section-hd" style="margin-top:4px">OPEN POSITIONS (${open.length})</div>` +
+    renderDashOpenTable(open);
+}
+
+function renderDashOpenTable(open) {
+  const pv = cfg.portVal || 0;
+  const cols = [
+    { lbl:'Stock',    sort: t => t.stock || '' },
+    { lbl:'Buy',      sort: t => t.buyPx || 0 },
+    { lbl:'CMP',      sort: t => { const lp=livePrices[t.stock]; return lp&&!lp.error?+lp.price:0; } },
+    { lbl:'SL',       sort: t => t.sl || 0 },
+    { lbl:'SL%',      sort: t => { const c=fullCalcs(t); return c.sl??0; } },
+    { lbl:'Qty',      sort: t => { const c=fullCalcs(t); return c.q??0; } },
+    { lbl:'Invested', sort: t => { const c=fullCalcs(t); return c.al??0; } },
+    { lbl:'Unreal ₹', sort: t => {
+        const lp=livePrices[t.stock]; const c=fullCalcs(t);
+        const cmp=lp&&!lp.error?+lp.price:null; const qty=c.q||t.qty||null;
+        return (cmp&&qty&&t.buyPx)?(cmp-t.buyPx)*qty:-Infinity;
+    }},
+    { lbl:'Unreal%',  sort: t => {
+        const lp=livePrices[t.stock]; const cmp=lp&&!lp.error?+lp.price:null;
+        return (cmp&&t.buyPx)?(cmp-t.buyPx)/t.buyPx*100:-Infinity;
+    }},
+    { lbl:'Days',     sort: t => { const c=fullCalcs(t); return c.days??-1; } },
+    { lbl:'Setup',    sort: t => t.setup||'' },
+    { lbl:'TV',       sort: null },
+  ];
+
+  // Sort
+  let list = [...open];
+  if (dashSortCol) {
+    const colDef = cols.find(c => c.lbl === dashSortCol);
+    if (colDef && colDef.sort) {
+      list.sort((a,b) => {
+        const va = colDef.sort(a), vb = colDef.sort(b);
+        const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+        return dashSortDir === 'asc' ? cmp : -cmp;
+      });
+    }
+  }
+
+  const thArr = cols.map(col => {
+    if (!col.sort) return `<th style="text-align:center">TV</th>`;
+    const isSorted = dashSortCol === col.lbl;
+    const arrow = isSorted ? (dashSortDir==='asc'?' ▲':' ▼') : '';
+    const hl = isSorted ? 'color:var(--accent);' : '';
+    return `<th style="${hl}cursor:pointer;user-select:none" onclick="dashSortByCol('${col.lbl}')" title="Sort by ${col.lbl}">${col.lbl}${arrow}</th>`;
+  }).join('');
+
+  const rows = list.map(t => {
+    const c = fullCalcs(t);
+    const qty = c.q || t.qty || null;
+    const lp = livePrices[t.stock];
+    const cmp = lp && !lp.error ? +lp.price : null;
+    const unrV = (cmp && qty && t.buyPx) ? (cmp - t.buyPx) * qty : null;
+    const unrP = (cmp && t.buyPx) ? (cmp - t.buyPx) / t.buyPx * 100 : null;
+    const invested = (t.buyPx && qty) ? t.buyPx * qty : (c.al || null);
+    const safeStock = escHtml(t.stock);
+    // Risk alert: individual stock SL risk > 10% of portfolio
+    const slRisk = (t.sl && t.buyPx && qty) ? Math.max(0,(t.buyPx-t.sl)*qty) : null;
+    const slRiskPct = slRisk !== null && pv > 0 ? slRisk/pv*100 : null;
+    const riskAlert = slRiskPct !== null && slRiskPct > 10;
+    return `<tr onclick="openDetailMo('${t.id}')" style="cursor:pointer${riskAlert?' background:rgba(255,69,96,.07)':''}">
+      <td style="text-align:left;font-family:var(--ff-d);font-weight:700;font-size:13px">
+        ${riskAlert?'<span title="Risk >10% of portfolio" style="color:var(--loss);margin-right:3px">⚠</span>':''}${safeStock}
+      </td>
+      <td>₹${t.buyPx||'—'}</td>
+      <td class="${cmp&&t.buyPx?(cmp>=t.buyPx?'val-p':'val-l'):''}">
+        ${cmp?'₹'+f2(cmp)+(lp.chg!==undefined?` <span style="font-size:9px">${lp.chg>=0?'+':''}${lp.chg}%</span>`:''):'—'}
+      </td>
+      <td>${t.sl?'₹'+t.sl:'—'}</td>
+      <td class="val-l">${c.sl!==null?f2(c.sl)+'%':'—'}</td>
+      <td>${qty??'—'}</td>
+      <td>${invested?fINR(invested,true):'—'}</td>
+      <td class="${pCls(unrV)}">${unrV!==null?fINR(unrV,true):'—'}</td>
+      <td class="${pCls(unrP)}">${unrP!==null?sgn(unrP)+f2(unrP)+'%':'—'}</td>
+      <td>${c.days!==null?c.days+'d':'—'}</td>
+      <td style="font-size:11px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.setup||'—')}</td>
+      <td style="text-align:center"><a href="${tvURL(t.stock)}" target="_blank" rel="noopener" class="tv-tbl-link" onclick="event.stopPropagation()" title="Open on TradingView" style="font-size:11px;padding:2px 5px">TV↗</a></td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="rp-tbl-wrap"><table class="rp-tbl dash-open-tbl">
+    <thead><tr>${thArr}</tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
 function renderDash() {
   const closed = trades.filter(t=>t.status==='Closed');
   const open   = trades.filter(t=>t.status==='Open');
@@ -1598,13 +1698,13 @@ function renderDash() {
   renderRiskPanel(open);
 
   const oDiv=document.getElementById('dash-open');
-  if(open.length){oDiv.innerHTML=`<div class="section-hd">OPEN POSITIONS (${open.length})</div>`+open.slice(0,8).map(tradeCardHTML).join('');}
-  else{oDiv.innerHTML='';}
+  if(open.length){ oDiv.innerHTML=`<div class="section-hd" style="margin-top:4px">OPEN POSITIONS (${open.length})</div>${renderDashOpenTable(open)}`; }
+  else{ oDiv.innerHTML=''; }
 
   const rDiv=document.getElementById('dash-recent');
-  if(closed.length){rDiv.innerHTML=`<div class="section-hd">RECENT CLOSED</div>`+closed.slice(0,5).map(tradeCardHTML).join('');}
-  else if(!open.length){rDiv.innerHTML=`<div class="empty"><div class="empty-ico">📊</div><div class="empty-title">No trades yet</div><div class="empty-sub">Tap the + button to log your first trade</div></div>`;}
-  else{rDiv.innerHTML='';}
+  if(!open.length && !closed.length){
+    rDiv.innerHTML=`<div class="empty"><div class="empty-ico">📊</div><div class="empty-title">No trades yet</div><div class="empty-sub">Tap the + button to log your first trade</div></div>`;
+  } else { rDiv.innerHTML=''; }
 }
 
 /* ═══════════════════════════════════════════════
@@ -1741,22 +1841,49 @@ function renderRiskPanel(open) {
     html += `<div class="rp-note" style="margin-top:8px">⚠ No stop losses set — add SL to each open trade to see accurate risk</div>`;
   }
 
+  // Feature 4: Open risk >10% portfolio alert
+  if (totalSLRiskPct !== null && totalSLRiskPct > 10) {
+    html += `<div class="risk-alert-banner">
+      ⚠️ <strong>Total open risk is ${f2(totalSLRiskPct)}% of portfolio</strong> — exceeds the 10% safety threshold.
+      Consider sizing down open positions or tightening stop losses.
+    </div>`;
+  }
+  // Individual position risk >10% alert
+  rows.forEach(r => {
+    if (r.slRiskPct !== null && r.slRiskPct > 10) {
+      html += `<div class="risk-alert-banner risk-alert-sm">⚠️ <strong>${escHtml(r.t.stock)}</strong> alone carries ${f2(r.slRiskPct)}% portfolio risk — size down.</div>`;
+    }
+  });
+
   el.innerHTML = html;
+}
+
+/* monthly chart mode: 'inr' | 'pct' */
+let monthlyChartMode = 'inr';
+function toggleMonthlyMode() {
+  monthlyChartMode = monthlyChartMode === 'inr' ? 'pct' : 'inr';
+  const btn = document.getElementById('monthly-toggle');
+  if(btn) btn.textContent = monthlyChartMode === 'inr' ? '₹' : '%';
+  renderMonthlyChart(trades.filter(t=>t.status==='Closed'));
 }
 
 function renderMonthlyChart(closed) {
   const el = document.getElementById('monthly-chart');
   if (!el) return;
+  const pv = cfg.portVal || 0;
   const byMonth = {};
   closed.forEach(t => {
     const d = t.sellDate||t.buyDate; if(!d) return;
     const key = d.slice(0,7);
     const c = fullCalcs(t); if(c.pnlV===null) return;
-    byMonth[key] = (byMonth[key]||0) + c.pnlV;
+    if(!byMonth[key]) byMonth[key] = {pnl:0, portPnl:0};
+    byMonth[key].pnl += c.pnlV;
+    if(pv>0) byMonth[key].portPnl += c.pnlV/pv*100;
   });
   const keys = Object.keys(byMonth).sort();
   if(!keys.length){el.innerHTML='<div class="chart-empty">No closed trades to chart yet</div>';return;}
-  const vals  = keys.map(k=>byMonth[k]);
+  const usePct = monthlyChartMode === 'pct';
+  const vals  = keys.map(k => usePct ? byMonth[k].portPnl : byMonth[k].pnl);
   const maxV  = Math.max(...vals.map(Math.abs),1);
   const W=el.offsetWidth||340, H=130, pad=12;
   const slotW=(W-pad*2)/keys.length;
@@ -1771,19 +1898,44 @@ function renderMonthlyChart(closed) {
     const y=v>=0?midY-h:midY;
     const col=v>=0?'var(--profit)':'var(--loss)';
     bars+=`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${h.toFixed(1)}" fill="${col}" rx="2" opacity="0.85"/>`;
-    if(h>20){const ly=v>=0?y-3:y+h+9;bars+=`<text x="${(x+barW/2).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" font-size="8" fill="${col}" font-family="IBM Plex Mono,monospace">${fINR(v,true)}</text>`;}
+    const lbl = usePct ? (v>=0?'+':'')+v.toFixed(2)+'%' : fINR(v,true);
+    if(h>20){const ly=v>=0?y-3:y+h+9;bars+=`<text x="${(x+barW/2).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" font-size="8" fill="${col}" font-family="IBM Plex Mono,monospace">${lbl}</text>`;}
     labels+=`<text x="${(x+barW/2).toFixed(1)}" y="${H-2}" text-anchor="middle" font-size="9" fill="var(--text3)" font-family="Rajdhani,sans-serif">${months[+k.slice(5)]||k.slice(5)} ${k.slice(2,4)}</text>`;
   });
   el.innerHTML=`<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"><line x1="${pad}" y1="${midY}" x2="${W-pad}" y2="${midY}" stroke="var(--border2)" stroke-width="1"/>${bars}${labels}</svg>`;
 }
+
 
 /* ═══════════════════════════════════════════════
    ANALYTICS VIEW
 ═══════════════════════════════════════════════ */
 function renderAnalytics() {
   const closed = trades.filter(t=>t.status==='Closed');
+  const pv = cfg.portVal || 0;
 
-  // Setup win rate
+  /* ── helper: draw a simple SVG donut/pie ── */
+  function drawPie(slices, size=120) {
+    if(!slices.length) return '';
+    const total = slices.reduce((s,sl)=>s+sl.val,0);
+    if(total<=0) return '';
+    const cx=size/2, cy=size/2, r=size/2-8, ri=r*0.52;
+    let angle = -Math.PI/2;
+    let paths = '';
+    slices.forEach(sl => {
+      const sweep = (sl.val/total)*Math.PI*2;
+      const x1=cx+r*Math.cos(angle), y1=cy+r*Math.sin(angle);
+      angle += sweep;
+      const x2=cx+r*Math.cos(angle), y2=cy+r*Math.sin(angle);
+      const ix1=cx+ri*Math.cos(angle-sweep), iy1=cy+ri*Math.sin(angle-sweep);
+      const ix2=cx+ri*Math.cos(angle), iy2=cy+ri*Math.sin(angle);
+      const big = sweep > Math.PI ? 1 : 0;
+      paths += `<path d="M${cx},${cy} L${f2(x1)},${f2(y1)} A${r},${r} 0 ${big},1 ${f2(x2)},${f2(y2)} Z" fill="${sl.col}" opacity="0.9"/>`;
+      paths += `<path d="M${f2(ix1)},${f2(iy1)} A${ri},${ri} 0 ${big},1 ${f2(ix2)},${f2(iy2)} L${f2(x2)},${f2(y2)} A${r},${r} 0 ${big},0 ${f2(x1)},${f2(y1)} Z" fill="var(--bg2)" opacity="1"/>`;
+    });
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}</svg>`;
+  }
+
+  // ── Setup win rate ──
   const setupEl = document.getElementById('an-setup');
   if(setupEl){
     const map={};
@@ -1797,15 +1949,23 @@ function renderAnalytics() {
     const rows=Object.entries(map).sort((a,b)=>b[1].total-a[1].total);
     if(!rows.length){setupEl.innerHTML='<div class="an-empty">No closed trades yet</div>';}
     else{
-      setupEl.innerHTML=rows.map(([s,d])=>{
+      // Pie: slices = setups by trade count
+      const pieSlices = rows.map(([s,d])=>{
+        const wr=d.total?d.wins/d.total:0;
+        const col=wr>=0.6?'var(--profit)':wr>=0.4?'var(--warn)':'var(--loss)';
+        return {val:d.total,col,lbl:s};
+      });
+      const pieHTML = drawPie(pieSlices, 110);
+      const legendHTML = rows.map(([s,d],i)=>{
         const wr=d.total?Math.round(d.wins/d.total*100):0;
         const col=wr>=60?'var(--profit)':wr>=40?'var(--warn)':'var(--loss)';
-        return `<div class="an-row"><div class="an-row-top"><span class="an-label">${escHtml(s)}</span><span class="an-meta">${d.wins}W/${d.total-d.wins}L &nbsp;·&nbsp;<span class="${pCls(d.pnl)}">${fINR(d.pnl,true)}</span></span></div><div class="an-bar-bg"><div class="an-bar" style="width:${wr}%;background:${col}"></div><span class="an-bar-lbl">${wr}%</span></div></div>`;
+        return `<div class="an-row"><div class="an-row-top"><span class="an-label" title="${escHtml(s)}">${escHtml(s)}</span><span class="an-meta">${d.wins}W/${d.total-d.wins}L &nbsp;·&nbsp;<span class="${pCls(d.pnl)}">${fINR(d.pnl,true)}</span></span></div><div class="an-bar-bg"><div class="an-bar" style="width:${wr}%;background:${col}"></div><span class="an-bar-lbl">${wr}%</span></div></div>`;
       }).join('');
+      setupEl.innerHTML=`<div class="an-pie-row"><div class="an-pie-wrap">${pieHTML}<div class="an-pie-center">${rows.length} setups</div></div><div class="an-legend">${legendHTML}</div></div>`;
     }
   }
 
-  // Duration buckets
+  // ── Duration buckets ──
   const durEl = document.getElementById('an-duration');
   if(durEl){
     const buckets=[
@@ -1827,16 +1987,23 @@ function renderAnalytics() {
     const active=buckets.filter(b=>b.trades.length>0);
     if(!active.length){durEl.innerHTML='<div class="an-empty">No closed trades yet</div>';}
     else{
-      durEl.innerHTML=active.map(b=>{
+      const pieSlices=active.map(b=>{
+        const wr=b.trades.length?b.wins/b.trades.length:0;
+        const col=wr>=0.6?'var(--profit)':wr>=0.4?'var(--warn)':'var(--loss)';
+        return {val:b.trades.length,col};
+      });
+      const pieHTML=drawPie(pieSlices,110);
+      const legendHTML=active.map(b=>{
         const wr=b.trades.length?Math.round(b.wins/b.trades.length*100):0;
         const avgPnl=b.trades.length?b.pnl/b.trades.length:0;
         const col=wr>=60?'var(--profit)':wr>=40?'var(--warn)':'var(--loss)';
         return `<div class="an-row"><div class="an-row-top"><span class="an-label">${b.label}</span><span class="an-meta">${b.trades.length} trades &nbsp;·&nbsp; Avg <span class="${pCls(avgPnl)}">${fINR(avgPnl,true)}</span></span></div><div class="an-bar-bg"><div class="an-bar" style="width:${wr}%;background:${col}"></div><span class="an-bar-lbl">${wr}% win</span></div></div>`;
       }).join('');
+      durEl.innerHTML=`<div class="an-pie-row"><div class="an-pie-wrap">${pieHTML}</div><div class="an-legend">${legendHTML}</div></div>`;
     }
   }
 
-  // Grade breakdown
+  // ── Grade breakdown ──
   const gradeEl=document.getElementById('an-grade');
   if(gradeEl){
     const gm={A:{count:0,wins:0,pnl:0},B:{count:0,wins:0,pnl:0},C:{count:0,wins:0,pnl:0},D:{count:0,wins:0,pnl:0},'?':{count:0,wins:0,pnl:0}};
@@ -1847,18 +2014,95 @@ function renderAnalytics() {
       if(c.pnlV!==null){gm[g].pnl+=c.pnlV;if(c.pnlV>=0)gm[g].wins++;}
     });
     const glabels={A:'Perfect',B:'Good',C:'Average',D:'Mistake','?':'Ungraded'};
+    const gcols={A:'var(--profit)',B:'var(--accent)',C:'var(--warn)',D:'var(--loss)','?':'var(--text3)'};
     const active=Object.entries(gm).filter(([,d])=>d.count>0);
     if(!active.length){gradeEl.innerHTML='<div class="an-empty">Grade trades using A/B/C/D when logging</div>';}
     else{
-      gradeEl.innerHTML=`<div class="grade-grid">${active.map(([g,d])=>{
+      const pieSlices=active.map(([g,d])=>({val:d.count,col:gcols[g]}));
+      const pieHTML=drawPie(pieSlices,110);
+      const cardsHTML=`<div class="grade-grid">${active.map(([g,d])=>{
         const wr=d.count?Math.round(d.wins/d.count*100):0;
         const avgPnl=d.count?d.pnl/d.count:0;
         const gcls=g==='?'?'grade-none':'grade-'+g.toLowerCase();
         return `<div class="grade-card"><div class="grade-badge-big ${gcls}">${g}</div><div class="grade-card-label">${glabels[g]}</div><div class="grade-card-stat" style="color:var(--text)">${d.count} trades</div><div class="grade-card-stat" style="color:${wr>=60?'var(--profit)':wr>=40?'var(--warn)':'var(--loss)'};">${wr}% win</div><div class="grade-card-stat ${pCls(avgPnl)}">${fINR(avgPnl,true)} avg</div></div>`;
       }).join('')}</div>`;
+      gradeEl.innerHTML=`<div class="an-pie-row" style="align-items:flex-start"><div class="an-pie-wrap">${pieHTML}</div><div style="flex:1;min-width:0">${cardsHTML}</div></div>`;
+    }
+  }
+
+  // ── Feature 5: Best performing setup insight ──
+  const insightEl=document.getElementById('an-insights');
+  if(insightEl && closed.length >= 3){
+    const insights = [];
+    // Best setup
+    const setupMap={};
+    closed.forEach(t=>{
+      const s=t.setup; if(!s||s==='No Setup') return;
+      if(!setupMap[s])setupMap[s]={wins:0,total:0,pnl:0};
+      setupMap[s].total++;
+      const c=fullCalcs(t);
+      if(c.pnlV!==null){setupMap[s].pnl+=c.pnlV;if(c.pnlV>=0)setupMap[s].wins++;}
+    });
+    const setups=Object.entries(setupMap).filter(([,d])=>d.total>=2);
+    if(setups.length){
+      const best=setups.sort((a,b)=>(b[1].wins/b[1].total)-(a[1].wins/a[1].total))[0];
+      const wr=Math.round(best[1].wins/best[1].total*100);
+      if(wr>=50) insights.push({icon:'🏆',type:'success',text:`<strong>${escHtml(best[0])}</strong> is your best setup — ${wr}% win rate over ${best[1].total} trades. <em>Double down on what works.</em>`});
+    }
+    // High SL loss rate
+    const slHits=closed.filter(t=>t.exitR==='SL Hit');
+    const slRate=closed.length?slHits.length/closed.length:0;
+    if(slRate>0.6) insights.push({icon:'🛑',type:'warn',text:`${Math.round(slRate*100)}% of your trades exited at SL. Review entry timing — are you buying at the right stage of the pattern?`});
+    // Avg hold duration
+    const allDays=closed.map(t=>fullCalcs(t).days).filter(x=>x!==null&&x>0);
+    const avgD=allDays.length?Math.round(allDays.reduce((a,b)=>a+b,0)/allDays.length):null;
+    if(avgD!==null&&avgD<=3) insights.push({icon:'⏱️',type:'warn',text:`Average hold is only ${avgD}d. Swing trades typically need 5-20 days — you may be cutting winners too early.`});
+    if(avgD!==null&&avgD>=20) insights.push({icon:'📅',type:'info',text:`Average hold of ${avgD}d is long. Check if losers are being held too long — let winners run, cut losers fast.`});
+    // Win rate overall
+    const allWins=closed.filter(t=>{const c=fullCalcs(t);return c.pnlV!==null&&c.pnlV>0;});
+    const wr=closed.length?Math.round(allWins.length/closed.length*100):0;
+    if(wr<30) insights.push({icon:'📉',type:'warn',text:`Win rate is ${wr}%. For a trend-following swing system, 30–50% with R:R ≥ 2x is the target. Focus on reducing losses, not increasing wins.`});
+    // Position sizing
+    const bigAllocs=trades.filter(t=>t.status==='Open').map(t=>{const c=fullCalcs(t);return c.ap||0;}).filter(x=>x>15);
+    if(bigAllocs.length>0) insights.push({icon:'⚖️',type:'warn',text:`${bigAllocs.length} open position${bigAllocs.length>1?'s':''} exceed 15% allocation. Consider sizing down to reduce concentration risk.`});
+
+    if(insights.length){
+      insightEl.innerHTML=`<div class="section-hd" style="margin-top:16px">📌 INSIGHTS FOR YOU</div><div class="insight-list">${insights.map(ins=>`<div class="insight-card insight-${ins.type}"><span class="insight-ico">${ins.icon}</span><span>${ins.text}</span></div>`).join('')}</div>`;
+    } else {
+      insightEl.innerHTML='';
+    }
+  } else if(insightEl){ insightEl.innerHTML=''; }
+
+  // ── Calendar heatmap ──
+  renderCalendarHeatmap();
+
+  // ── Exit reason breakdown ──
+  const exitEl=document.getElementById('an-exit');
+  if(exitEl){
+    const exitMap={};
+    closed.forEach(t=>{
+      const e=t.exitR||'Untagged';
+      if(!exitMap[e])exitMap[e]={count:0,pnl:0,wins:0};
+      exitMap[e].count++;
+      const c=fullCalcs(t);
+      if(c.pnlV!==null){exitMap[e].pnl+=c.pnlV;if(c.pnlV>=0)exitMap[e].wins++;}
+    });
+    const rows=Object.entries(exitMap).sort((a,b)=>b[1].count-a[1].count);
+    if(!rows.length){exitEl.innerHTML='<div class="an-empty">No closed trades yet</div>';}
+    else{
+      const exitCols=['var(--profit)','var(--loss)','var(--accent)','var(--warn)','#9b59b6','#e67e22','#1abc9c','#e74c3c'];
+      const pieSlices=rows.map((r,i)=>({val:r[1].count,col:exitCols[i%exitCols.length]}));
+      const pieHTML=drawPie(pieSlices,110);
+      const legendHTML=rows.map(([e,d],i)=>{
+        const wr=d.count?Math.round(d.wins/d.count*100):0;
+        const col=exitCols[i%exitCols.length];
+        return `<div class="an-row"><div class="an-row-top"><span class="an-label" style="color:${col}">${escHtml(e)}</span><span class="an-meta">${d.count} trades &nbsp;·&nbsp;<span class="${pCls(d.pnl)}">${fINR(d.pnl,true)}</span></span></div><div class="an-bar-bg"><div class="an-bar" style="width:${wr}%;background:${col}"></div><span class="an-bar-lbl">${wr}%</span></div></div>`;
+      }).join('');
+      exitEl.innerHTML=`<div class="an-pie-row"><div class="an-pie-wrap">${pieHTML}</div><div class="an-legend">${legendHTML}</div></div>`;
     }
   }
 }
+
 
 /* ═══════════════════════════════════════════════
    PDF EXPORT
@@ -2109,6 +2353,7 @@ function exportPDF() {
 /* ─── TradingView link helper ─── */
 function tvURL(stock) {
   // Strip common suffixes users might type, then prefix NSE:
+  // Handle & in stock names correctly (e.g. GVT&D)
   const sym = stock.replace(/\.(NS|BO|NSE|BSE)$/i, '').toUpperCase();
   return `https://www.tradingview.com/chart/?symbol=NSE%3A${encodeURIComponent(sym)}`;
 }
@@ -2204,7 +2449,7 @@ function renderTable() {
     const get = lbl => {
       switch(lbl) {
         case '#':         return `<td class="td-num" style="text-align:left;position:sticky;left:0;background:var(--bg2);z-index:1">${i+1}</td>`;
-        case 'Stock':     return `<td class="td-stock" style="text-align:left;position:sticky;left:38px;background:var(--bg2);z-index:1">${t.stock}<a href="${tvURL(t.stock)}" target="_blank" rel="noopener" class="tv-tbl-link" onclick="event.stopPropagation()">↗</a></td>`;
+        case 'Stock':     return `<td class="td-stock" style="text-align:left;position:sticky;left:38px;background:var(--bg2);z-index:1">${escHtml(t.stock)}<a href="${tvURL(t.stock)}" target="_blank" rel="noopener" class="tv-tbl-link" onclick="event.stopPropagation()">↗</a></td>`;
         case 'Status':    return `<td><span class="badge b-${t.status.toLowerCase()}">${t.status}</span></td>`;
         case 'Type':      return `<td><span class="badge b-${t.type.toLowerCase()}">${t.type==='Virtual'?'VIRT':'REAL'}</span></td>`;
         case 'Live ₹':  {
@@ -2223,9 +2468,40 @@ function renderTable() {
         case 'Alloc ₹':return `<td>${c.al?fINR(c.al,true):'—'}</td>`;
         case 'Alloc %':   return `<td>${c.ap!==null?f2(c.ap)+'%':'—'}</td>`;
         case 'Qty':       return `<td>${c.q!==null?c.q:'—'}</td>`;
-        case 'P&L ₹':return `<td class="${pCls(c.pnlV)}">${c.pnlV!==null?fINR(c.pnlV,true):'—'}</td>`;
-        case 'P&L %':     return `<td class="${pCls(c.pnlP)}">${c.pnlP!==null?sgn(c.pnlP)+f2(c.pnlP)+'%':'—'}</td>`;
-        case 'Port P&L%': return `<td class="${pCls(c.portPnl)}">${c.portPnl!==null?sgn(c.portPnl)+f2(c.portPnl)+'%':'—'}</td>`;
+        case 'P&L ₹': {
+          if (c.pnlV !== null) return `<td class="${pCls(c.pnlV)}">${fINR(c.pnlV,true)}</td>`;
+          if (t.status === 'Open') {
+            const lp2 = livePrices[t.stock];
+            const cmp2 = lp2 && !lp2.error ? +lp2.price : null;
+            const qty2 = c.q || t.qty || null;
+            const unrV = (cmp2 && qty2 && t.buyPx) ? (cmp2 - t.buyPx) * qty2 : null;
+            return `<td class="${pCls(unrV)}" title="Unrealised">${unrV !== null ? fINR(unrV,true) + '<span style="font-size:9px;opacity:.55"> U</span>' : '<span style="font-size:10px;color:var(--text3)">OPEN</span>'}</td>`;
+          }
+          return `<td>—</td>`;
+        }
+        case 'P&L %': {
+          if (c.pnlP !== null) return `<td class="${pCls(c.pnlP)}">${sgn(c.pnlP)+f2(c.pnlP)+'%'}</td>`;
+          if (t.status === 'Open') {
+            const lp3 = livePrices[t.stock];
+            const cmp3 = lp3 && !lp3.error ? +lp3.price : null;
+            const unrP = (cmp3 && t.buyPx) ? (cmp3 - t.buyPx) / t.buyPx * 100 : null;
+            return `<td class="${pCls(unrP)}" title="Unrealised">${unrP !== null ? sgn(unrP)+f2(unrP)+'%' + '<span style="font-size:9px;opacity:.55"> U</span>' : '—'}</td>`;
+          }
+          return `<td>—</td>`;
+        }
+        case 'Port P&L%': {
+          if (c.portPnl !== null) return `<td class="${pCls(c.portPnl)}">${sgn(c.portPnl)+f2(c.portPnl)+'%'}</td>`;
+          if (t.status === 'Open') {
+            const lp4 = livePrices[t.stock];
+            const cmp4 = lp4 && !lp4.error ? +lp4.price : null;
+            const qty4 = c.q || t.qty || null;
+            const unrV4 = (cmp4 && qty4 && t.buyPx) ? (cmp4 - t.buyPx) * qty4 : null;
+            const pv4 = cfg.portVal || 0;
+            const unrPP = (unrV4 !== null && pv4 > 0) ? unrV4 / pv4 * 100 : null;
+            return `<td class="${pCls(unrPP)}" title="Unrealised">${unrPP !== null ? sgn(unrPP)+f2(unrPP)+'%' + '<span style="font-size:9px;opacity:.55"> U</span>' : '—'}</td>`;
+          }
+          return `<td>—</td>`;
+        }
         case 'R:R':       return `<td class="${pCls(c.rr)}">${c.rr!==null?f2(c.rr)+'x':'—'}</td>`;
         case 'Days':      return `<td>${c.days!==null?c.days+'d':'—'}</td>`;
         case 'Grade':     return `<td>${t.grade?gradeBadgeHTML(t.grade):'—'}</td>`;
@@ -2664,6 +2940,149 @@ function registerSW() {
 /* ═══════════════════════════════════════════════
    BOOT
 ═══════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════
+   CALENDAR HEATMAP
+═══════════════════════════════════════════════ */
+function renderCalendarHeatmap() {
+  const el = document.getElementById('an-calendar');
+  if (!el) return;
+  if (!trades.length) { el.innerHTML = '<div class="an-empty">No trades to show</div>'; return; }
+
+  // Build date map: date → {pnl, count, wins, losses, open}
+  const dateMap = {};
+  const mark = (date, pnl, isOpen) => {
+    if (!date) return;
+    if (!dateMap[date]) dateMap[date] = {pnl:0, count:0, wins:0, losses:0, open:0};
+    const d = dateMap[date];
+    d.count++;
+    if (isOpen) { d.open++; }
+    else { d.pnl += pnl; if(pnl>=0) d.wins++; else d.losses++; }
+  };
+  trades.forEach(t => {
+    const c = fullCalcs(t);
+    if (t.status === 'Open') {
+      mark(t.buyDate, 0, true);
+    } else {
+      mark(t.buyDate, 0, true);
+      if (t.sellDate && c.pnlV !== null) mark(t.sellDate, c.pnlV, false);
+    }
+  });
+
+  const allDates = Object.keys(dateMap).sort();
+  if (!allDates.length) { el.innerHTML = '<div class="an-empty">No dates found</div>'; return; }
+
+  // Show last 6 months of weeks
+  const today = new Date();
+  const sixMonthsAgo = new Date(today);
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  // Align to Sunday start of that week
+  const startDate = new Date(sixMonthsAgo);
+  startDate.setDate(startDate.getDate() - startDate.getDay());
+
+  const maxAbsPnl = Math.max(...Object.values(dateMap).map(d => Math.abs(d.pnl)), 1);
+
+  const CELL = 13, GAP = 2, STEP = CELL + GAP;
+  const weeks = [];
+  let cur = new Date(startDate);
+  while (cur <= today) {
+    const week = [];
+    for (let dow = 0; dow < 7; dow++) {
+      const iso = cur.toISOString().slice(0,10);
+      week.push({ iso, data: dateMap[iso] || null, future: cur > today });
+      cur.setDate(cur.getDate() + 1);
+    }
+    weeks.push(week);
+  }
+
+  const W = weeks.length * STEP + 30; // extra left for day labels
+  const H = 7 * STEP + 24; // +24 for month labels
+  const LEFT = 22;
+
+  let cells = '';
+  let monthLabels = '';
+  let lastMonth = -1;
+
+  weeks.forEach((week, wi) => {
+    const x = LEFT + wi * STEP;
+    // Month label at start of new month
+    const firstNonFuture = week.find(d => !d.future);
+    if (firstNonFuture) {
+      const m = new Date(firstNonFuture.iso).getMonth();
+      if (m !== lastMonth) {
+        lastMonth = m;
+        const mNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        monthLabels += `<text x="${x}" y="10" font-size="8" fill="var(--text3)" font-family="Rajdhani,sans-serif">${mNames[m]}</text>`;
+      }
+    }
+    week.forEach((day, dow) => {
+      const y = 18 + dow * STEP;
+      if (day.future) {
+        cells += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" rx="2" fill="transparent"/>`;
+        return;
+      }
+      let fill = 'var(--bg3)';
+      let opacity = 1;
+      let title = day.iso;
+      if (day.data) {
+        const d = day.data;
+        title = `${day.iso}: ${d.count} trade${d.count!==1?'s':''}`;
+        if (d.pnl !== 0) title += ` | P&L: ${d.pnl>=0?'+':''}${d.pnl.toFixed(0)}`;
+        if (d.open > 0 && d.wins===0 && d.losses===0) {
+          fill = 'var(--accent)'; opacity = 0.5 + 0.5*(d.count/5);
+        } else if (d.pnl > 0) {
+          const intensity = Math.min(1, Math.abs(d.pnl) / maxAbsPnl);
+          opacity = 0.25 + intensity * 0.75;
+          fill = 'var(--profit)';
+        } else if (d.pnl < 0) {
+          const intensity = Math.min(1, Math.abs(d.pnl) / maxAbsPnl);
+          opacity = 0.25 + intensity * 0.75;
+          fill = 'var(--loss)';
+        } else {
+          fill = 'var(--accent)'; opacity = 0.35;
+        }
+      }
+      cells += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" rx="2" fill="${fill}" opacity="${opacity.toFixed(2)}" onclick="heatmapClick('${day.iso}')" style="cursor:pointer"><title>${title}</title></rect>`;
+    });
+  });
+
+  // Day labels Mon/Wed/Fri
+  const dayLabels = ['S','M','T','W','T','F','S'];
+  let dayLbls = '';
+  [1,3,5].forEach(d => {
+    dayLbls += `<text x="${LEFT-4}" y="${18 + d*STEP + CELL*0.75}" text-anchor="end" font-size="8" fill="var(--text3)" font-family="Rajdhani,sans-serif">${dayLabels[d]}</text>`;
+  });
+
+  el.innerHTML = `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px">
+    <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+      ${monthLabels}${dayLbls}${cells}
+    </svg>
+  </div>
+  <div class="heatmap-legend">
+    <span style="color:var(--text3);font-size:10px">Less</span>
+    <svg width="70" height="12"><rect x="0"  y="0" width="12" height="12" rx="2" fill="var(--bg3)"/>
+    <rect x="15" y="0" width="12" height="12" rx="2" fill="var(--loss)" opacity=".4"/>
+    <rect x="30" y="0" width="12" height="12" rx="2" fill="var(--loss)" opacity=".8"/>
+    <rect x="45" y="0" width="12" height="12" rx="2" fill="var(--profit)" opacity=".4"/>
+    <rect x="60" y="0" width="12" height="12" rx="2" fill="var(--profit)" opacity=".8"/></svg>
+    <span style="color:var(--text3);font-size:10px">More</span>
+    <span style="color:var(--accent);font-size:10px;margin-left:8px">■ Entry/Open</span>
+  </div>`;
+}
+
+function heatmapClick(iso) {
+  // Switch to ledger filtered to that date
+  const matches = trades.filter(t => t.buyDate===iso || t.sellDate===iso);
+  if(!matches.length) return;
+  if(matches.length===1){ openDetailMo(matches[0].id); return; }
+  // Multiple trades — switch to table with search
+  ledgerSearch = iso;
+  const inp = document.getElementById('ledger-search');
+  if(inp) inp.value = iso;
+  switchView('table');
+  renderTable();
+  toast(`Showing ${matches.length} trades on ${iso}`);
+}
+
 (function init() {
   loadTheme();
   loadCfg();
