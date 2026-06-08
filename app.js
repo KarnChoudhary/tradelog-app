@@ -235,6 +235,8 @@ function saveCfg() {
     const json = JSON.stringify(cfg);
     localStorage.setItem(LS_C, json);
     localStorage.setItem(LS_C_BAK, json);  // mirror backup
+    // Auto-push cfg changes to cloud so all devices stay in sync
+    if (sbClient) pushCfgCloud();
   } catch(e) {
     console.error('TradeLog: cfg save failed', e);
   }
@@ -340,36 +342,39 @@ function initSB() {
 
 async function autoSyncOnLoad() {
   if (!sbClient) return;
+  const pill = document.getElementById('sync-pill');
+  const setPill = (txt, cls='sync-pill') => { if(pill) pill.innerHTML = `<span class="${cls}">${txt}</span>`; };
+  setPill('☁ Syncing…');
   try {
     const { data, error } = await sbClient
       .from('tradelog').select('*').order('updated_at', { ascending: false });
-    if (error || !data?.length) return;
+    if (error) { setPill('☁ Sync Err', 'sync-pill sync-err'); console.warn('TradeLog autoSync:', error.message); return; }
 
-    const cloud = data.map(r => JSON.parse(r.payload));
-
-    // Merge strategy: cloud wins for any trade that's newer than local copy
-    let changed = false;
-    cloud.forEach(ct => {
+    // Always merge cloud into local — cloud wins for newer upd timestamp
+    let added=0, updated=0;
+    (data||[]).forEach(row => {
+      let ct; try { ct = JSON.parse(row.payload); } catch(e){ return; }
       const li = trades.findIndex(t => t.id === ct.id);
-      if (li === -1) {
-        trades.unshift(ct);
-        changed = true;
-      } else if ((ct.upd || 0) > (trades[li].upd || 0)) {
-        trades[li] = ct;
-        changed = true;
-      }
+      if (li === -1) { trades.unshift(ct); added++; }
+      else if ((ct.upd || 0) > (trades[li].upd || 0)) { trades[li] = ct; updated++; }
     });
 
-    if (changed) {
-      saveTrades();
-      renderAll();
-      const pill = document.getElementById('sync-pill');
-      if (pill) pill.innerHTML = '<span class="sync-pill">☁ SYNCED</span>';
-      setTimeout(() => {
-        if (pill) pill.innerHTML = '<span class="sync-pill">☁ SYNC ON</span>';
-      }, 3000);
+    // Push any local trades not yet on cloud (new device scenario)
+    const cloudIds = new Set((data||[]).map(r=>r.id));
+    const localOnly = trades.filter(t => !cloudIds.has(t.id));
+    if (localOnly.length) {
+      await Promise.all(localOnly.map(t => pushTrade(t)));
     }
+
+    if (added || updated) { saveTrades(); renderAll(); }
+
+    const total = (data||[]).length;
+    // Also pull cfg (portfolio value, dropdowns, features) from cloud
+    await pullCfgCloud();
+    setPill(`☁ ${total} trades synced`);
+    setTimeout(() => setPill('☁ LIVE'), 2500);
   } catch(e) {
+    setPill('☁ Offline', 'sync-pill sync-warn');
     console.warn('TradeLog autoSync:', e.message);
   }
 }
@@ -484,6 +489,26 @@ async function saveAndTestSB() {
   } catch(e) {
     setConnStatus('err', '✗ Network error: ' + e.message);
   }
+}
+
+async function pushCfgCloud() {
+  if (!sbClient) return;
+  try {
+    await sbClient.from('tradelog_cfg').upsert({ key:'cfg', payload: cfg, updated_at: new Date().toISOString() }, { onConflict:'key' });
+  } catch(e) { console.warn('TradeLog pushCfg:', e.message); }
+}
+
+async function pullCfgCloud() {
+  if (!sbClient) return;
+  try {
+    const { data } = await sbClient.from('tradelog_cfg').select('*').eq('key','cfg').single();
+    if (data?.payload) {
+      cfg = safeMerge(data.payload, { portVal:0, sbUrl:cfg.sbUrl, sbKey:cfg.sbKey, features:{}, dropdowns:{} });
+      saveCfg();
+      migrateSettings();
+      renderAll();
+    }
+  } catch(e) { console.warn('TradeLog pullCfg:', e.message); }
 }
 
 async function pushCloud() {
@@ -1529,6 +1554,60 @@ function dashSortByCol(col) {
 
 function renderDashOpenTable(open) {
   const pv = cfg.portVal || 0;
+
+  // ── compute totals for summary strip ──
+  let totalInvested = 0, totalSLRisk = 0, totalUnreal = 0;
+  open.forEach(t => {
+    const c = fullCalcs(t); const qty = c.q || t.qty || null;
+    const invested = (t.buyPx && qty) ? t.buyPx * qty : (c.al || 0);
+    totalInvested += invested;
+    if (t.sl && t.buyPx && qty) totalSLRisk += Math.max(0, (t.buyPx - t.sl) * qty);
+    const lp = livePrices[t.stock];
+    const cmp = lp && !lp.error ? +lp.price : null;
+    if (cmp && qty && t.buyPx) totalUnreal += (cmp - t.buyPx) * qty;
+  });
+  const totalInvPct   = pv > 0 ? totalInvested / pv * 100 : null;
+  const totalRiskPct  = pv > 0 ? totalSLRisk   / pv * 100 : null;
+  const cashFree      = Math.max(0, pv - totalInvested);
+  const cashFreePct   = pv > 0 ? cashFree / pv * 100 : null;
+  const riskHigh      = totalRiskPct !== null && totalRiskPct > 10;
+
+  const iCol = p => p===null?'':p>85?'val-l':p>65?'':'val-p';
+  const rCol = p => p===null?'':p>5?'val-l':p>2?'':'val-p';
+
+  // Summary strip
+  let strip = `<div class="rp-strip" style="margin-bottom:10px">
+    <div class="rp-strip-item">
+      <div class="rp-strip-lbl">Invested</div>
+      <div class="rp-strip-val ${iCol(totalInvPct)}">${totalInvPct!==null?f2(totalInvPct)+'%':'—'}</div>
+      <div class="rp-strip-sub">${fINR(totalInvested,true)}</div>
+    </div>
+    <div class="rp-strip-div"></div>
+    <div class="rp-strip-item">
+      <div class="rp-strip-lbl">Max SL Risk</div>
+      <div class="rp-strip-val ${rCol(totalRiskPct)}">${totalRiskPct!==null?f2(totalRiskPct)+'%':'—'}</div>
+      <div class="rp-strip-sub">${fINR(totalSLRisk,true)}</div>
+    </div>
+    <div class="rp-strip-div"></div>
+    <div class="rp-strip-item">
+      <div class="rp-strip-lbl">Unrealised</div>
+      <div class="rp-strip-val ${pCls(totalUnreal || null)}">${totalUnreal!==0?fINR(totalUnreal,true):'—'}</div>
+      <div class="rp-strip-sub">open P&L</div>
+    </div>
+    <div class="rp-strip-div"></div>
+    <div class="rp-strip-item">
+      <div class="rp-strip-lbl">Cash Free</div>
+      <div class="rp-strip-val">${cashFreePct!==null?f2(cashFreePct)+'%':'—'}</div>
+      <div class="rp-strip-sub">${fINR(cashFree,true)}</div>
+    </div>
+  </div>`;
+
+  if (riskHigh) {
+    strip += `<div class="risk-alert-banner" style="margin-bottom:8px">
+      ⚠️ <strong>Total SL risk is ${f2(totalRiskPct)}% of portfolio</strong> — exceeds 10% safety threshold. Consider sizing down or tightening stops.
+    </div>`;
+  }
+
   const cols = [
     { lbl:'Stock',    sort: t => t.stock || '' },
     { lbl:'Buy',      sort: t => t.buyPx || 0 },
@@ -1536,7 +1615,9 @@ function renderDashOpenTable(open) {
     { lbl:'SL',       sort: t => t.sl || 0 },
     { lbl:'SL%',      sort: t => { const c=fullCalcs(t); return c.sl??0; } },
     { lbl:'Qty',      sort: t => { const c=fullCalcs(t); return c.q??0; } },
-    { lbl:'Invested', sort: t => { const c=fullCalcs(t); return c.al??0; } },
+    { lbl:'Invested', sort: t => { const c=fullCalcs(t); const qty=c.q||t.qty||null; return (t.buyPx&&qty)?t.buyPx*qty:(c.al??0); } },
+    { lbl:'Risk ₹',   sort: t => { const c=fullCalcs(t); const qty=c.q||t.qty||null; return (t.sl&&t.buyPx&&qty)?Math.max(0,(t.buyPx-t.sl)*qty):0; } },
+    { lbl:'Risk%',    sort: t => { const c=fullCalcs(t); const qty=c.q||t.qty||null; const r=(t.sl&&t.buyPx&&qty)?Math.max(0,(t.buyPx-t.sl)*qty):null; return (r&&pv>0)?r/pv*100:0; } },
     { lbl:'Unreal ₹', sort: t => {
         const lp=livePrices[t.stock]; const c=fullCalcs(t);
         const cmp=lp&&!lp.error?+lp.price:null; const qty=c.q||t.qty||null;
@@ -1580,14 +1661,14 @@ function renderDashOpenTable(open) {
     const unrV = (cmp && qty && t.buyPx) ? (cmp - t.buyPx) * qty : null;
     const unrP = (cmp && t.buyPx) ? (cmp - t.buyPx) / t.buyPx * 100 : null;
     const invested = (t.buyPx && qty) ? t.buyPx * qty : (c.al || null);
-    const safeStock = escHtml(t.stock);
-    // Risk alert: individual stock SL risk > 10% of portfolio
     const slRisk = (t.sl && t.buyPx && qty) ? Math.max(0,(t.buyPx-t.sl)*qty) : null;
     const slRiskPct = slRisk !== null && pv > 0 ? slRisk/pv*100 : null;
-    const riskAlert = slRiskPct !== null && slRiskPct > 10;
-    return `<tr onclick="openDetailMo('${t.id}')" style="cursor:pointer${riskAlert?' background:rgba(255,69,96,.07)':''}">
+    const indivAlert = slRiskPct !== null && slRiskPct > 10;
+    const noSL = !t.sl;
+    const safeStock = escHtml(t.stock);
+    return `<tr onclick="openDetailMo('${t.id}')" style="cursor:pointer${indivAlert?' background:rgba(255,69,96,.07)':''}">
       <td style="text-align:left;font-family:var(--ff-d);font-weight:700;font-size:13px">
-        ${riskAlert?'<span title="Risk >10% of portfolio" style="color:var(--loss);margin-right:3px">⚠</span>':''}${safeStock}
+        ${indivAlert?'<span title="Risk >10%" style="color:var(--loss);margin-right:3px">⚠</span>':''}${safeStock}
       </td>
       <td>₹${t.buyPx||'—'}</td>
       <td class="${cmp&&t.buyPx?(cmp>=t.buyPx?'val-p':'val-l'):''}">
@@ -1597,19 +1678,36 @@ function renderDashOpenTable(open) {
       <td class="val-l">${c.sl!==null?f2(c.sl)+'%':'—'}</td>
       <td>${qty??'—'}</td>
       <td>${invested?fINR(invested,true):'—'}</td>
+      <td class="val-l">${slRisk!==null?fINR(slRisk,true):noSL?'<span style="font-size:10px;color:var(--warn)">No SL</span>':'—'}</td>
+      <td class="${rCol(slRiskPct)}">${slRiskPct!==null?f2(slRiskPct)+'%':noSL?'<span style="font-size:10px;color:var(--warn)">Set SL</span>':'—'}</td>
       <td class="${pCls(unrV)}">${unrV!==null?fINR(unrV,true):'—'}</td>
       <td class="${pCls(unrP)}">${unrP!==null?sgn(unrP)+f2(unrP)+'%':'—'}</td>
       <td>${c.days!==null?c.days+'d':'—'}</td>
       <td style="font-size:11px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.setup||'—')}</td>
-      <td style="text-align:center"><a href="${tvURL(t.stock)}" target="_blank" rel="noopener" class="tv-tbl-link" onclick="event.stopPropagation()" title="Open on TradingView" style="font-size:11px;padding:2px 5px">TV↗</a></td>
+      <td style="text-align:center"><a href="${tvURL(t.stock)}" target="_blank" rel="noopener" class="tv-tbl-link" onclick="event.stopPropagation()" style="font-size:11px;padding:2px 5px">TV↗</a></td>
     </tr>`;
   }).join('');
 
-  return `<div class="rp-tbl-wrap"><table class="rp-tbl dash-open-tbl">
+  // Totals row
+  const totRiskPctDisp = totalRiskPct !== null ? `<span class="${rCol(totalRiskPct)}">${f2(totalRiskPct)}%</span>` : '—';
+  const totUnrealDisp = totalUnreal !== 0 ? `<span class="${pCls(totalUnreal)}">${fINR(totalUnreal,true)}</span>` : '—';
+  const totRow = `<tr class="rp-tbl-total">
+    <td style="text-align:left;font-weight:700;font-family:var(--ff-d)">TOTAL</td>
+    <td>—</td><td>—</td><td>—</td><td>—</td>
+    <td>${open.length}</td>
+    <td>${fINR(totalInvested,true)}</td>
+    <td class="val-l">${fINR(totalSLRisk,true)}</td>
+    <td>${totRiskPctDisp}</td>
+    <td colspan="2">${totUnrealDisp}</td>
+    <td>—</td><td>—</td><td>—</td>
+  </tr>`;
+
+  return strip + `<div class="rp-tbl-wrap"><table class="rp-tbl dash-open-tbl">
     <thead><tr>${thArr}</tr></thead>
-    <tbody>${rows}</tbody>
+    <tbody>${rows}${totRow}</tbody>
   </table></div>`;
 }
+
 
 function renderDash() {
   const closed = trades.filter(t=>t.status==='Closed');
@@ -1693,9 +1791,6 @@ function renderDash() {
   }
 
   renderMonthlyChart(closed);
-
-  // ── Portfolio Invested % + Open Risk ──
-  renderRiskPanel(open);
 
   const oDiv=document.getElementById('dash-open');
   if(open.length){ oDiv.innerHTML=`<div class="section-hd" style="margin-top:4px">OPEN POSITIONS (${open.length})</div>${renderDashOpenTable(open)}`; }
@@ -2030,48 +2125,140 @@ function renderAnalytics() {
     }
   }
 
-  // ── Feature 5: Best performing setup insight ──
+  // ── Insights panel — comprehensive swing trader analysis ──
   const insightEl=document.getElementById('an-insights');
-  if(insightEl && closed.length >= 3){
-    const insights = [];
-    // Best setup
+  if(insightEl){
+    const insights=[];
+    const allCalcs=closed.map(t=>({t,c:fullCalcs(t)}));
+    const withPnl=allCalcs.filter(x=>x.c.pnlV!==null);
+    const wins=withPnl.filter(x=>x.c.pnlV>=0);
+    const losses=withPnl.filter(x=>x.c.pnlV<0);
+    const winRate=withPnl.length?wins.length/withPnl.length:0;
+    const pv=cfg.portVal||0;
+
+    // ── 1. Best & worst setup ──
     const setupMap={};
     closed.forEach(t=>{
-      const s=t.setup; if(!s||s==='No Setup') return;
-      if(!setupMap[s])setupMap[s]={wins:0,total:0,pnl:0};
+      const s=t.setup||'No Setup';
+      if(!setupMap[s])setupMap[s]={wins:0,losses:0,total:0,pnl:0,name:s};
       setupMap[s].total++;
       const c=fullCalcs(t);
-      if(c.pnlV!==null){setupMap[s].pnl+=c.pnlV;if(c.pnlV>=0)setupMap[s].wins++;}
+      if(c.pnlV!==null){setupMap[s].pnl+=c.pnlV; if(c.pnlV>=0)setupMap[s].wins++; else setupMap[s].losses++;}
     });
-    const setups=Object.entries(setupMap).filter(([,d])=>d.total>=2);
+    const setups=Object.values(setupMap).filter(s=>s.total>=2&&s.name!=='No Setup');
     if(setups.length){
-      const best=setups.sort((a,b)=>(b[1].wins/b[1].total)-(a[1].wins/a[1].total))[0];
-      const wr=Math.round(best[1].wins/best[1].total*100);
-      if(wr>=50) insights.push({icon:'🏆',type:'success',text:`<strong>${escHtml(best[0])}</strong> is your best setup — ${wr}% win rate over ${best[1].total} trades. <em>Double down on what works.</em>`});
+      const best=setups.sort((a,b)=>(b.wins/b.total)-(a.wins/a.total))[0];
+      const worst=setups.sort((a,b)=>(a.wins/a.total)-(b.wins/b.total))[0];
+      const bwr=Math.round(best.wins/best.total*100);
+      const wwr=Math.round(worst.wins/worst.total*100);
+      if(bwr>=50) insights.push({icon:'🏆',type:'success',text:`<strong>${escHtml(best.name)}</strong> is your best setup — ${bwr}% win rate over ${best.total} trades (P&L: ${fINR(best.pnl,true)}). <em>Concentrate here.</em>`});
+      if(worst.name!==best.name&&wwr<35&&worst.total>=3) insights.push({icon:'🚫',type:'warn',text:`<strong>${escHtml(worst.name)}</strong> has only ${wwr}% win rate over ${worst.total} trades (P&L: ${fINR(worst.pnl,true)}). <em>Consider avoiding or paper-trading this setup.</em>`});
     }
-    // High SL loss rate
-    const slHits=closed.filter(t=>t.exitR==='SL Hit');
-    const slRate=closed.length?slHits.length/closed.length:0;
-    if(slRate>0.6) insights.push({icon:'🛑',type:'warn',text:`${Math.round(slRate*100)}% of your trades exited at SL. Review entry timing — are you buying at the right stage of the pattern?`});
-    // Avg hold duration
-    const allDays=closed.map(t=>fullCalcs(t).days).filter(x=>x!==null&&x>0);
-    const avgD=allDays.length?Math.round(allDays.reduce((a,b)=>a+b,0)/allDays.length):null;
-    if(avgD!==null&&avgD<=3) insights.push({icon:'⏱️',type:'warn',text:`Average hold is only ${avgD}d. Swing trades typically need 5-20 days — you may be cutting winners too early.`});
-    if(avgD!==null&&avgD>=20) insights.push({icon:'📅',type:'info',text:`Average hold of ${avgD}d is long. Check if losers are being held too long — let winners run, cut losers fast.`});
-    // Win rate overall
-    const allWins=closed.filter(t=>{const c=fullCalcs(t);return c.pnlV!==null&&c.pnlV>0;});
-    const wr=closed.length?Math.round(allWins.length/closed.length*100):0;
-    if(wr<30) insights.push({icon:'📉',type:'warn',text:`Win rate is ${wr}%. For a trend-following swing system, 30–50% with R:R ≥ 2x is the target. Focus on reducing losses, not increasing wins.`});
-    // Position sizing
-    const bigAllocs=trades.filter(t=>t.status==='Open').map(t=>{const c=fullCalcs(t);return c.ap||0;}).filter(x=>x>15);
-    if(bigAllocs.length>0) insights.push({icon:'⚖️',type:'warn',text:`${bigAllocs.length} open position${bigAllocs.length>1?'s':''} exceed 15% allocation. Consider sizing down to reduce concentration risk.`});
 
+    // ── 2. R:R Analysis ──
+    const rrTrades=withPnl.filter(x=>x.c.rr!==null);
+    if(rrTrades.length>=3){
+      const avgRR=rrTrades.reduce((s,x)=>s+x.c.rr,0)/rrTrades.length;
+      const winRR=rrTrades.filter(x=>x.c.pnlV>=0);
+      const lossRR=rrTrades.filter(x=>x.c.pnlV<0);
+      const avgWinRR=winRR.length?winRR.reduce((s,x)=>s+x.c.rr,0)/winRR.length:0;
+      if(avgRR<1.5) insights.push({icon:'⚖️',type:'warn',text:`Average R:R is <strong>${f2(avgRR)}x</strong> — below the 1.5x minimum for swing trading. At your win rate (${Math.round(winRate*100)}%), you need R:R ≥ ${f2((1-winRate)/winRate)}x to break even.`});
+      else insights.push({icon:'⚖️',type:'success',text:`Average R:R is <strong>${f2(avgRR)}x</strong> — good. Keep targeting ≥ 2x on new trades. Your winners average ${f2(avgWinRR)}x R:R.`});
+    }
+
+    // ── 3. SL discipline ──
+    const slHits=closed.filter(t=>t.exitR==='SL Hit'||t.exitR==='Stop Loss');
+    const slRate=closed.length?slHits.length/closed.length:0;
+    const noSlTrades=trades.filter(t=>t.status==='Open'&&!t.sl);
+    if(noSlTrades.length>0) insights.push({icon:'🛑',type:'warn',text:`<strong>${noSlTrades.length} open trade${noSlTrades.length>1?'s':''} have no stop loss</strong> (${noSlTrades.map(t=>escHtml(t.stock)).join(', ')}). Always define your risk before entering.`});
+    if(slRate>0.5&&closed.length>=5) insights.push({icon:'📍',type:'warn',text:`${Math.round(slRate*100)}% of trades exited at stop loss. Either entries need refinement, or stops are too tight — check if SL is placed below a key support/base.`});
+
+    // ── 4. Hold duration ──
+    const allDays=withPnl.map(x=>x.c.days).filter(x=>x>0);
+    const winDays=wins.map(x=>x.c.days).filter(x=>x>0);
+    const lossDays=losses.map(x=>x.c.days).filter(x=>x>0);
+    const avgD=allDays.length?Math.round(allDays.reduce((a,b)=>a+b,0)/allDays.length):null;
+    const avgWD=winDays.length?Math.round(winDays.reduce((a,b)=>a+b,0)/winDays.length):null;
+    const avgLD=lossDays.length?Math.round(lossDays.reduce((a,b)=>a+b,0)/lossDays.length):null;
+    if(avgWD&&avgLD&&avgLD>avgWD) insights.push({icon:'⏳',type:'warn',text:`You hold losers (avg ${avgLD}d) longer than winners (avg ${avgWD}d). Classic mistake — <em>cut losses fast, let winners run</em>. Consider using a time stop.`});
+    if(avgWD&&avgLD&&avgWD>avgLD+5) insights.push({icon:'✅',type:'success',text:`Good discipline — winners held avg ${avgWD}d vs losers avg ${avgLD}d. You're letting winners breathe.`});
+    if(avgD!==null&&avgD<4&&closed.length>=5) insights.push({icon:'⏱️',type:'warn',text:`Average hold is only ${avgD}d — very short for swing trading. Are you being shaken out by normal volatility? Widen stops or check entry quality.`});
+
+    // ── 5. Win rate vs expectancy ──
+    if(withPnl.length>=5){
+      const avgWin=wins.length?wins.reduce((s,x)=>s+x.c.pnlV,0)/wins.length:0;
+      const avgLoss=losses.length?Math.abs(losses.reduce((s,x)=>s+x.c.pnlV,0)/losses.length):0;
+      const expectancy=winRate*avgWin - (1-winRate)*avgLoss;
+      const expPct=pv>0?expectancy/pv*100:null;
+      if(expectancy>0){
+        insights.push({icon:'📈',type:'success',text:`Positive expectancy: <strong>${fINR(expectancy,true)} per trade</strong>${expPct?` (${f2(expPct)}% of portfolio)`:''} — your system has mathematical edge. Avg win: ${fINR(avgWin,true)}, Avg loss: ${fINR(avgLoss,true)}.`});
+      } else {
+        insights.push({icon:'📉',type:'warn',text:`Negative expectancy: <strong>${fINR(expectancy,true)} per trade</strong>. Avg win ${fINR(avgWin,true)} vs avg loss ${fINR(avgLoss,true)}. Fix R:R or entry quality before scaling up.`});
+      }
+    }
+
+    // ── 6. Market state performance ──
+    const mktMap={};
+    closed.forEach(t=>{
+      const m=t.mktState||'Unknown';
+      if(!mktMap[m])mktMap[m]={wins:0,total:0,pnl:0};
+      mktMap[m].total++;
+      const c=fullCalcs(t);
+      if(c.pnlV!==null){mktMap[m].pnl+=c.pnlV;if(c.pnlV>=0)mktMap[m].wins++;}
+    });
+    const mktEntries=Object.entries(mktMap).filter(([k,d])=>d.total>=2&&k!=='Unknown');
+    if(mktEntries.length>=2){
+      const bestMkt=mktEntries.sort((a,b)=>(b[1].pnl)-(a[1].pnl))[0];
+      const worstMkt=mktEntries.sort((a,b)=>(a[1].pnl)-(b[1].pnl))[0];
+      if(bestMkt[1].pnl>0) insights.push({icon:'🌊',type:'info',text:`You perform best in <strong>${escHtml(bestMkt[0])}</strong> market conditions (${fINR(bestMkt[1].pnl,true)} total, ${Math.round(bestMkt[1].wins/bestMkt[1].total*100)}% win). Trade more aggressively when market aligns.`});
+      if(worstMkt[1].pnl<0&&worstMkt[0]!==bestMkt[0]) insights.push({icon:'🌧️',type:'warn',text:`Worst results in <strong>${escHtml(worstMkt[0])}</strong> market (${fINR(worstMkt[1].pnl,true)}). Reduce position size or sit out during these conditions.`});
+    }
+
+    // ── 7. Grade vs outcome correlation ──
+    const gradeMap={A:{pnl:0,wins:0,n:0},B:{pnl:0,wins:0,n:0},C:{pnl:0,wins:0,n:0},D:{pnl:0,wins:0,n:0}};
+    closed.forEach(t=>{
+      const g=t.grade; if(!g||!gradeMap[g]) return;
+      const c=fullCalcs(t); if(c.pnlV===null) return;
+      gradeMap[g].n++; gradeMap[g].pnl+=c.pnlV; if(c.pnlV>=0)gradeMap[g].wins++;
+    });
+    const gradedTotal=Object.values(gradeMap).reduce((s,v)=>s+v.n,0);
+    if(gradedTotal>=5){
+      const aB=gradeMap.A.n+gradeMap.B.n;
+      const aBpnl=gradeMap.A.pnl+gradeMap.B.pnl;
+      const cD=gradeMap.C.n+gradeMap.D.n;
+      const cDpnl=gradeMap.C.pnl+gradeMap.D.pnl;
+      if(aB>0&&cD>0&&aBpnl>cDpnl) insights.push({icon:'🎯',type:'success',text:`Grade accuracy confirmed — A/B trades earned ${fINR(aBpnl,true)} vs C/D trades ${fINR(cDpnl,true)}. <em>Your execution quality predicts outcome. Keep grading every trade.</em>`});
+      if(gradeMap.D.n>=2&&gradeMap.D.pnl<0) insights.push({icon:'🔴',type:'warn',text:`${gradeMap.D.n} grade-D trades cost you ${fINR(gradeMap.D.pnl,true)}. These are avoidable losses — review what makes a D-grade entry and build a checklist.`});
+    } else if(gradedTotal<withPnl.length*0.5&&withPnl.length>=5){
+      insights.push({icon:'📋',type:'info',text:`Only ${gradedTotal} of ${withPnl.length} closed trades are graded. Grading entries (A=perfect, D=mistake) helps identify patterns in your best and worst trades.`});
+    }
+
+    // ── 8. Consecutive losses (drawdown) ──
+    const sortedClosed=[...closed].sort((a,b)=>(a.sellDate||a.buyDate||'').localeCompare(b.sellDate||b.buyDate||''));
+    let maxStreak=0,curStreak=0;
+    sortedClosed.forEach(t=>{const c=fullCalcs(t);if(c.pnlV===null)return;if(c.pnlV<0){curStreak++;maxStreak=Math.max(maxStreak,curStreak);}else{curStreak=0;}});
+    if(maxStreak>=4) insights.push({icon:'🔥',type:'warn',text:`Longest losing streak: <strong>${maxStreak} consecutive losses</strong>. A streak this long usually means the market environment shifted. After 3 losses in a row, step back and assess market conditions before next trade.`});
+
+    // ── 9. Position sizing consistency ──
+    const openAllocs=trades.filter(t=>t.status==='Open').map(t=>{const c=fullCalcs(t);return c.ap||0;}).filter(x=>x>0);
+    if(openAllocs.length>=2){
+      const maxA=Math.max(...openAllocs), minA=Math.min(...openAllocs);
+      if(maxA>minA*4) insights.push({icon:'⚖️',type:'warn',text:`Open position sizes vary widely (${f2(minA)}% to ${f2(maxA)}%). Inconsistent sizing distorts your stats — consider a fixed % per trade (e.g., 5–10% each).`});
+    }
+
+    // ── 10. Profit-booking habit ──
+    const partialExit=closed.filter(t=>t.exitR&&(t.exitR.toLowerCase().includes('partial')||t.exitR.toLowerCase().includes('trail')));
+    if(closed.length>=8&&partialExit.length===0) insights.push({icon:'💡',type:'info',text:`You have no partial exits recorded. Consider booking 50% at 1R profit and trailing the rest — reduces stress and locks in gains on swing trades.`});
+
+    // render
     if(insights.length){
-      insightEl.innerHTML=`<div class="section-hd" style="margin-top:16px">📌 INSIGHTS FOR YOU</div><div class="insight-list">${insights.map(ins=>`<div class="insight-card insight-${ins.type}"><span class="insight-ico">${ins.icon}</span><span>${ins.text}</span></div>`).join('')}</div>`;
+      insightEl.innerHTML=`<div class="section-hd">📌 SWING TRADER INSIGHTS</div><div class="insight-list">${insights.map(ins=>`<div class="insight-card insight-${ins.type}"><span class="insight-ico">${ins.icon}</span><span>${ins.text}</span></div>`).join('')}</div>`;
+    } else if(closed.length<3){
+      insightEl.innerHTML=`<div class="section-hd">📌 SWING TRADER INSIGHTS</div><div class="insight-card insight-info"><span class="insight-ico">💬</span><span>Log at least 3 closed trades to unlock personalised insights.</span></div>`;
     } else {
       insightEl.innerHTML='';
     }
-  } else if(insightEl){ insightEl.innerHTML=''; }
+  }
 
   // ── Calendar heatmap ──
   renderCalendarHeatmap();
